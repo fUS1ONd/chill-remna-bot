@@ -93,7 +93,7 @@ func (a *App) issueReceipt(ctx context.Context, provider, extID string, kopecks 
 	claimed, err := a.store.ClaimReceipt(ctx, r)
 	if err != nil {
 		a.log.Error("moynalog: чек не застолблён", "err", err, "provider", provider, "ext", extID)
-		a.notify(ctx, a.cfg.AdminID, i18n.T(a.lang(a.cfg.AdminID), "admin.receipt_claim_failed",
+		a.notify(ctx, a.cfg.AdminID, i18n.T(a.lang(a.cfg.AdminID), "admin.receipt_unclaimed",
 			escapeName(extID), kopecksToRub(kopecks)))
 		return
 	}
