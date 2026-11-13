@@ -126,6 +126,9 @@ type incomeResponse struct {
 	ID                  string `json:"id"`
 }
 
+// timeLayout — формат времени в запросах ФНС: местное время со смещением.
+const timeLayout = "2006-01-02T15:04:05-07:00"
+
 // Kind — что делать с чеком после неудачного обращения к ФНС.
 type Kind int
 
@@ -224,7 +227,9 @@ func (c *Client) CreateIncome(ctx context.Context, in Income) (string, error) {
 			return "", &Error{Kind: KindUnknown, Msg: fmt.Sprintf("ответ %d без идентификатора чека", status)}
 		}
 		return id, nil
-	case status >= 500:
+	case status >= 500 || status == http.StatusRequestTimeout || status == http.StatusTooManyRequests:
+		// 5xx, таймаут и «слишком часто» — временные: доход не принят, позже
+		// тот же запрос может пройти.
 		return "", &Error{Kind: KindRetry, Msg: fmt.Sprintf("status %d: %s", status, errBody)}
 	default:
 		// Тело содержит код причины (validation.failed, превышение лимита и т.п.).
@@ -242,8 +247,8 @@ func (c *Client) createOnce(ctx context.Context, in Income) (id string, status i
 		op = now
 	}
 	body, _ := json.Marshal(incomeRequest{
-		OperationTime:                   op.In(moscow).Format("2006-01-02T15:04:05-07:00"),
-		RequestTime:                     now.In(moscow).Format("2006-01-02T15:04:05-07:00"),
+		OperationTime:                   op.In(moscow).Format(timeLayout),
+		RequestTime:                     now.In(moscow).Format(timeLayout),
 		Services:                        []incomeService{{Name: in.Name, Amount: in.Amount, Quantity: 1}},
 		TotalAmount:                     fmt.Sprintf("%.2f", in.Amount),
 		Client:                          incomeClient{IncomeType: "FROM_INDIVIDUAL"},

@@ -91,6 +91,9 @@ func TestCreateIncomeOutcomes(t *testing.T) {
 		{"сбой 5xx", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}, KindRetry},
+		{"слишком часто", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+		}, KindRetry},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

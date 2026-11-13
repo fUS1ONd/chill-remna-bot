@@ -154,17 +154,23 @@ func (a *App) processReceipt(ctx context.Context, provider, extID string) {
 		a.log.Info("moynalog: чек пробит", "ext", extID, "uuid", uuid, "kopecks", r.AmountKopecks)
 		return
 	}
-	state := model.ReceiptPending
-	switch moynalog.KindOf(err) {
-	case moynalog.KindUnknown:
-		state = model.ReceiptUnknown
-	case moynalog.KindRejected:
-		state = model.ReceiptRejected
-	}
+	state := receiptStateAfter(err)
 	if serr := a.store.SetReceiptResult(saveCtx, provider, extID, state, "", err.Error()); serr != nil {
 		a.log.Error("moynalog: исход пробития не записан", "err", serr, "ext", extID, "state", state)
 	}
 	a.log.Error("moynalog: чек не пробит", "err", err, "ext", extID, "state", state)
+}
+
+// receiptStateAfter — состояние чека после неудачного обращения к ФНС.
+func receiptStateAfter(err error) string {
+	switch moynalog.KindOf(err) {
+	case moynalog.KindUnknown:
+		return model.ReceiptUnknown
+	case moynalog.KindRejected:
+		return model.ReceiptRejected
+	default:
+		return model.ReceiptPending
+	}
 }
 
 // newReceiptMarker — случайная метка чека из шести символов a-z0-9. Не номер
