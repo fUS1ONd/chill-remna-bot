@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,13 @@ func (a *App) moynalogCfg() model.MoyNalogConfig {
 	return a.botCfg.MoyNalog
 }
 
-func (a *App) mnClientGet() (*moynalog.Client, model.MoyNalogConfig) {
+// moyNalogAPI — кабинет «Мой налог», как его видит бот. Шов для фейка ФНС в
+// тестах.
+type moyNalogAPI interface {
+	CreateIncome(ctx context.Context, in moynalog.Income) (string, error)
+}
+
+func (a *App) mnClientGet() (moyNalogAPI, model.MoyNalogConfig) {
 	cfg := a.moynalogCfg()
 	if !cfg.Enabled || cfg.Login == "" || cfg.Password == "" {
 		return nil, cfg
@@ -32,31 +39,146 @@ func (a *App) mnClientGet() (*moynalog.Client, model.MoyNalogConfig) {
 	defer a.mnMu.Unlock()
 	key := cfg.Login + "|" + cfg.Password
 	if a.mnClient == nil || a.mnKey != key {
-		a.mnClient = moynalog.New(cfg.Login, cfg.Password)
+		if a.mnNew != nil {
+			a.mnClient = a.mnNew(cfg.Login, cfg.Password)
+		} else {
+			a.mnClient = moynalog.New(cfg.Login, cfg.Password)
+		}
 		a.mnKey = key
 	}
 	return a.mnClient, cfg
 }
 
-func (a *App) fiscalize(amountRub float64, detail string) {
+// receiptTimeout — потолок одного обращения к ФНС вместе со входом в кабинет.
+const receiptTimeout = time.Minute
+
+// issueReceipt заводит чек «Мой налог» по оплате и пробивает его в фоне.
+//
+// Чек положен только деньгам, пришедшим через ЮKassa: оплата с баланса учтена
+// при пополнении, прочие провайдеры в чек самозанятого не идут. Право на чек
+// столбится строкой в базе здесь же, синхронно и до ФНС: не вставилась —
+// чек по этому платежу уже чей-то, второго не будет. Сам поход в ФНС идёт в
+// фоне: вне замков финализации и вне ответа вебхуку.
+func (a *App) issueReceipt(ctx context.Context, provider, extID string, kopecks int64, detail string, incomeAt time.Time) {
+	if provider != model.PayMethodYooKassa || a.store == nil || kopecks <= 0 {
+		return
+	}
 	client, cfg := a.mnClientGet()
-	if client == nil || amountRub <= 0 {
+	if client == nil {
+		return
+	}
+	if extID == "" {
+		a.log.Error("moynalog: платёж без id, чек не застолбить", "provider", provider, "kopecks", kopecks)
+		return
+	}
+	marker, err := newReceiptMarker()
+	if err != nil {
+		a.log.Error("moynalog: метка чека", "err", err)
 		return
 	}
 	name := detail
 	if cfg.ServiceName != "" {
 		name = cfg.ServiceName
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(a.bgContext(), 30*time.Second)
-		defer cancel()
-		id, err := client.CreateIncome(ctx, amountRub, name)
-		if err != nil {
-			a.log.Error("moynalog income", "err", err, "amount", amountRub)
+	r := &model.Receipt{
+		Provider:      provider,
+		ExtID:         extID,
+		AmountKopecks: kopecks,
+		// Метка в наименовании — единственное, по чему чек находится в списке
+		// доходов ФНС, если ответ на пробитие потерялся.
+		Name:     name + " (" + marker + ")",
+		Marker:   marker,
+		IncomeAt: incomeAt.UTC().Format(time.RFC3339),
+	}
+	claimed, err := a.store.ClaimReceipt(ctx, r)
+	if err != nil {
+		a.log.Error("moynalog: чек не застолблён", "err", err, "provider", provider, "ext", extID)
+		a.notify(ctx, a.cfg.AdminID, i18n.T(a.lang(a.cfg.AdminID), "admin.receipt_claim_failed",
+			escapeName(extID), kopecksToRub(kopecks)))
+		return
+	}
+	if !claimed {
+		a.log.Info("moynalog: чек по платежу уже застолблён", "provider", provider, "ext", extID)
+		return
+	}
+	a.trackMoney("receipt", func(ctx context.Context) {
+		a.processReceipt(ctx, provider, extID)
+	})
+}
+
+func receiptKey(provider, extID string) string { return provider + "/" + extID }
+
+// processReceipt доводит застолблённый чек в pending до ФНС — одна попытка.
+// Строка перечитывается под receiptBusy, поэтому вызывать можно с любого пути:
+// чек, уже пробитый или занятый другим путём, второй раз в ФНС не уйдёт.
+func (a *App) processReceipt(ctx context.Context, provider, extID string) {
+	key := receiptKey(provider, extID)
+	if _, busy := a.receiptBusy.LoadOrStore(key, struct{}{}); busy {
+		return
+	}
+	defer a.receiptBusy.Delete(key)
+
+	r, err := a.store.GetReceipt(ctx, provider, extID)
+	if err != nil {
+		a.log.Error("moynalog: чтение чека", "err", err, "ext", extID)
+		return
+	}
+	if r == nil || r.State != model.ReceiptPending {
+		return
+	}
+	client, _ := a.mnClientGet()
+	if client == nil {
+		return
+	}
+	incomeAt, _ := time.Parse(time.RFC3339, r.IncomeAt)
+
+	ctx, cancel := context.WithTimeout(ctx, receiptTimeout)
+	defer cancel()
+	uuid, err := client.CreateIncome(ctx, moynalog.Income{
+		Amount:        float64(r.AmountKopecks) / 100,
+		Name:          r.Name,
+		OperationTime: incomeAt,
+	})
+	// Запись исхода — своим контекстом: контекст обращения к ФНС мог истечь,
+	// а без записи пробитый чек остался бы pending и ушёл бы в ФНС ещё раз.
+	saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer saveCancel()
+	if err == nil {
+		if serr := a.store.SetReceiptResult(saveCtx, provider, extID, model.ReceiptCreated, uuid, ""); serr != nil {
+			// Чек в ФНС есть, а в базе он pending — следующий проход пробил бы
+			// второй. Уводим в unknown: сверка по метке найдёт этот же чек.
+			a.log.Error("moynalog: чек пробит, но не записан", "err", serr, "ext", extID, "uuid", uuid)
+			_ = a.store.SetReceiptResult(saveCtx, provider, extID, model.ReceiptUnknown, "", "чек пробит, uuid не записался: "+uuid)
 			return
 		}
-		a.log.Info("moynalog receipt registered", "id", id, "amount", amountRub)
-	}()
+		a.log.Info("moynalog: чек пробит", "ext", extID, "uuid", uuid, "kopecks", r.AmountKopecks)
+		return
+	}
+	state := model.ReceiptPending
+	switch moynalog.KindOf(err) {
+	case moynalog.KindUnknown:
+		state = model.ReceiptUnknown
+	case moynalog.KindRejected:
+		state = model.ReceiptRejected
+	}
+	if serr := a.store.SetReceiptResult(saveCtx, provider, extID, state, "", err.Error()); serr != nil {
+		a.log.Error("moynalog: исход пробития не записан", "err", serr, "ext", extID, "state", state)
+	}
+	a.log.Error("moynalog: чек не пробит", "err", err, "ext", extID, "state", state)
+}
+
+// newReceiptMarker — случайная метка чека из шести символов a-z0-9. Не номер
+// платежа: порядковый номер выдал бы налоговой число расчётов.
+func newReceiptMarker() (string, error) {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+	buf := make([]byte, 6)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	for i, b := range buf {
+		buf[i] = alphabet[int(b)%len(alphabet)]
+	}
+	return string(buf), nil
 }
 
 func parseAmountRub(s string) float64 {

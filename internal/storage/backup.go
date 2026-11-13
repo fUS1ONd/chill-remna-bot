@@ -72,6 +72,7 @@ var backupTables = []string{
 	"whitelist",
 	"invites",
 	"invite_uses",
+	"receipts",
 	"media_cache",
 	"torrent_reports",
 	"torrent_strikes",

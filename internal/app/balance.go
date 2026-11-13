@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-telegram/bot/models"
 
@@ -621,10 +622,7 @@ func (a *App) finalizeTopUp(ctx context.Context, chatID int64, kopecks int64, me
 		return err
 	}
 	a.payLog(ctx, method, extID, chatID, "topup_credited", "kopecks=%d amount=%s", kopecks, amount)
-	// Чек «Мой налог» — только по платежам ЮKassa.
-	if method == model.PayMethodYooKassa {
-		a.fiscalize(float64(kopecks)/100, "Пополнение баланса")
-	}
+	a.issueReceipt(ctx, method, extID, kopecks, "Пополнение баланса", time.Now())
 	if !hasChat(chatID) {
 		return nil
 	}

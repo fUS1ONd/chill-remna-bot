@@ -30,7 +30,6 @@ import (
 	"remnabot/internal/hostctl"
 	"remnabot/internal/i18n"
 	"remnabot/internal/model"
-	"remnabot/internal/moynalog"
 	"remnabot/internal/remnawave"
 	"remnabot/internal/rsimport"
 	"remnabot/internal/storage"
@@ -316,8 +315,14 @@ type App struct {
 	botUser   string
 
 	mnMu     sync.Mutex
-	mnClient *moynalog.Client
+	mnClient moyNalogAPI
 	mnKey    string
+	// mnNew создаёт клиента «Мой налог»; nil — настоящий. Тесты подставляют
+	// сюда фейк ФНС.
+	mnNew func(login, pass string) moyNalogAPI
+	// receiptBusy — чеки, по которым прямо сейчас идёт обращение к ФНС
+	// (ключ receiptKey). Второй путь к тому же чеку его пропускает.
+	receiptBusy sync.Map
 
 	payLogPurgedAt time.Time
 

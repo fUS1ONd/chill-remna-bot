@@ -443,6 +443,10 @@ type fakeStore struct {
 	inviteUses []model.InviteUse
 	autopays   map[int64]*model.AutoPay
 	seq        int64
+	// receipts — чеки «Мой налог» по ключу «провайдер/id платежа».
+	receipts map[string]*model.Receipt
+	// addPaymentErr — пока задана, запись платежа падает не по дублю.
+	addPaymentErr error
 }
 
 func (s *fakeStore) WhitelistAllUsers(context.Context) (int64, error) {
@@ -1057,6 +1061,9 @@ func (s *fakeStore) AddPayment(_ context.Context, p *model.Payment) error {
 	if s.pays == nil {
 		s.pays = map[int64]*model.Payment{}
 	}
+	if s.addPaymentErr != nil {
+		return s.addPaymentErr
+	}
 
 	if p.ExtID != "" {
 		for _, x := range s.pays {
@@ -1125,6 +1132,47 @@ func (s *fakeStore) MostPopularPlan(_ context.Context) (int, int, error) {
 	}
 	return best, total, nil
 }
+func (s *fakeStore) ClaimReceipt(_ context.Context, r *model.Receipt) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.receipts == nil {
+		s.receipts = map[string]*model.Receipt{}
+	}
+	key := r.Provider + "/" + r.ExtID
+	if _, ok := s.receipts[key]; ok {
+		return false, nil
+	}
+	cp := *r
+	if cp.State == "" {
+		cp.State = model.ReceiptPending
+	}
+	cp.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	s.receipts[key] = &cp
+	return true, nil
+}
+
+func (s *fakeStore) GetReceipt(_ context.Context, provider, extID string) (*model.Receipt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.receipts[provider+"/"+extID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *r
+	return &cp, nil
+}
+
+func (s *fakeStore) SetReceiptResult(_ context.Context, provider, extID, state, uuid, lastError string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.receipts[provider+"/"+extID]; ok {
+		r.State, r.UUID, r.LastError = state, uuid, lastError
+		r.Attempts++
+		r.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	return nil
+}
+
 func (s *fakeStore) PaymentByExtID(_ context.Context, extID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

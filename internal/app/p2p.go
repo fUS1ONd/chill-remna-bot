@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -1364,6 +1365,10 @@ func (a *App) finalizePurchase(ctx context.Context, telegramID int64, months int
 	breach := a.planGateBreach(ctx, telegramID, snapCodeOr(snap, model.PlanCodeBase))
 	link, expireAt, applied, err := a.finalizePurchaseCore(ctx, telegramID, months, method, amount, extID, snap)
 	if err == nil {
+		// Чек — после ядра, вне его шардового замка: столбление — запись в
+		// базу, а сам поход в ФНС issueReceipt уводит в фон.
+		a.issueReceipt(ctx, method, extID, int64(math.Round(parseAmountRub(amount)*100)),
+			fmt.Sprintf("Подписка %d мес.", months), time.Now())
 		// Доп-подписка применяется ПОСЛЕ ядра: это ещё один поход в панель, а
 		// ядро держит шардовый замок финализации — лишний HTTP-раунд под ним
 		// тормозил бы доставку соседних оплат (у предпроверки Stars дедлайн).
@@ -1545,11 +1550,6 @@ func (a *App) finalizePurchaseCore(ctx context.Context, telegramID int64, months
 	a.forgetBuyIntentFor(ctx, telegramID, months)
 	a.grantReferralBonus(ctx, telegramID)
 	a.creditReferralPercent(ctx, telegramID, amount)
-	// Чек «Мой налог» — только по платежам ЮKassa: крипта и P2P в чек
-	// самозанятого не идут, а оплата с баланса учтена при пополнении.
-	if method == model.PayMethodYooKassa {
-		a.fiscalize(parseAmountRub(amount), fmt.Sprintf("Подписка %d мес.", months))
-	}
 	return link, expireAt, snap, nil
 }
 

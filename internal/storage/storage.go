@@ -189,6 +189,14 @@ type Storage interface {
 	PaidPayments(ctx context.Context) ([]model.Payment, error)
 	PaymentByExtID(ctx context.Context, extID string) (bool, error)
 
+	// ClaimReceipt столбит право на чек вставкой строки до похода в ФНС.
+	// false — строка по этому платежу уже есть, чек ведёт кто-то другой.
+	ClaimReceipt(ctx context.Context, r *model.Receipt) (bool, error)
+	// GetReceipt — чек по платежу провайдера; nil, если его нет.
+	GetReceipt(ctx context.Context, provider, extID string) (*model.Receipt, error)
+	// SetReceiptResult записывает исход обращения к ФНС и считает попытку.
+	SetReceiptResult(ctx context.Context, provider, extID, state, uuid, lastError string) error
+
 	MostPopularPlan(ctx context.Context) (months int, total int, err error)
 
 	LoadMediaFileID(ctx context.Context, section string) (id string, ok bool, err error)
