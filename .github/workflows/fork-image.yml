@@ -1,0 +1,59 @@
+name: fork-image
+
+# Образ форка: ghcr.io/fus1ond/chill-remna-bot. Собирается только по тегу
+# v<версия автора>-f<N> (например, v1.13.0-f1), который ставится на ветку
+# fus1ond. Пуш в ветки образ не публикует, latest не бывает, arm64 не
+# собираем — сервер форка один и он amd64. Правила — docs/fork.md.
+#
+# Отдельный файл, а не правка docker.yml: GitHub отключает воркфлоу по пути
+# файла, а docker.yml в main форка — авторский и публиковал бы latest.
+# Поэтому docker.yml и pages.yml в форке отключены (gh workflow disable).
+on:
+  push:
+    tags: ["v*-f*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          # Имя задано явно: владелец репозитория пишется в смешанном
+          # регистре, а имя образа в GHCR — только строчными.
+          images: ghcr.io/fus1ond/chill-remna-bot
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
