@@ -85,6 +85,14 @@ type Invite struct {
 // InviteGrantAccess — приглашение выдаёт только Доступ.
 const InviteGrantAccess = "access"
 
+// UserInviteStats — счётчики Приглашений пользователей для владельца:
+// создано, активировано и сколько из активировавших оплатили.
+type UserInviteStats struct {
+	Created   int
+	Activated int
+	Paid      int
+}
+
 // InviteUse — человек, пришедший по приглашению.
 type InviteUse struct {
 	Code       string

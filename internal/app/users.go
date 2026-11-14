@@ -473,6 +473,8 @@ func (a *App) showUser(ctx context.Context, chatID, uid int64) {
 		}
 	}
 
+	invLine, invRows := a.userInviteBlock(ctx, lang, u)
+
 	var actions []models.InlineKeyboardButton
 	if !botBlocked || (subExists && !subBlocked) {
 		actions = append(actions, btn(i18n.T(lang, "btn.block"), "usr:block:"+id))
@@ -496,6 +498,7 @@ func (a *App) showUser(ctx context.Context, chatID, uid int64) {
 			btn(i18n.T(lang, "btn.user_plans"), "usr:plans:"+id),
 		})
 	}
+	rows = append(rows, invRows...)
 	rows = append(rows,
 		[]models.InlineKeyboardButton{btn(i18n.T(lang, "btn.delete"), "usr:del:"+id)},
 		[]models.InlineKeyboardButton{
@@ -506,7 +509,7 @@ func (a *App) showUser(ctx context.Context, chatID, uid int64) {
 		// оттуда: иначе найденный человек стоил бы нового поиска.
 		[]models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), backToUserList(a.getUI(chatID))), btn(i18n.T(lang, "btn.home"), "menu:home")},
 	)
-	a.sendUsrKB(ctx, chatID, i18n.T(lang, "user.card", a.userLabelFor(ctx, u), created, p2p, status, subBlock)+torLine, rows)
+	a.sendUsrKB(ctx, chatID, i18n.T(lang, "user.card", a.userLabelFor(ctx, u), created, p2p, status, subBlock)+invLine+torLine, rows)
 }
 
 // clientPlanTitle — тариф текущей подписки для экранов клиента (чат,
@@ -616,6 +619,18 @@ func (a *App) onUsers(ctx context.Context, chatID int64, val string, srcMsgID in
 		a.showUsers(ctx, chatID, page)
 	case "view":
 		uid, _ := strconv.ParseInt(arg, 10, 64)
+		a.showUser(ctx, chatID, uid)
+	case "refs":
+		uidStr, p, _ := strings.Cut(arg, ":")
+		uid, _ := strconv.ParseInt(uidStr, 10, 64)
+		page, _ := strconv.Atoi(p)
+		a.showReferrals(ctx, chatID, uid, page)
+	case "urev":
+		uidStr, code, _ := strings.Cut(arg, ":")
+		uid, _ := strconv.ParseInt(uidStr, 10, 64)
+		if a.store != nil {
+			a.revokeUserInviteOf(ctx, uid, code)
+		}
 		a.showUser(ctx, chatID, uid)
 	case "block":
 		lang := a.lang(chatID)

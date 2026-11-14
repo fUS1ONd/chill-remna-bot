@@ -1714,4 +1714,15 @@ var en = map[string]string{
 	"mini.dev_reset_fail":        "could not reset devices",
 	"mini.no_sub":                "subscription not found",
 	"tx.err_too_long":            "• Too long for this place — shorten the text.",
+
+	// Вид владельца на Приглашения пользователей.
+	"access.btn_user_invite_list": "👥 Invites by users",
+	"uinv.owner_title":            "👥 <b>Invites by users</b>\n\nActive: <b>%d</b>\nCreated: <b>%d</b> · Activated: <b>%d</b> · Of them paid: <b>%d</b>\n\nTap an invite to open it and revoke.",
+	"inv.card_author":             "Inviter: %s",
+	"user.inviter":                "Invited by: %s",
+	"user.uinv_active":            "Active invites: %d",
+	"user.btn_inviter":            "👤 Invited by",
+	"user.btn_referrals":          "👥 Invited (%d)",
+	"user.btn_uinv_revoke":        "🚫 Revoke %s · until %s",
+	"user.refs_title":             "👥 <b>Invited by</b> %s\n\nTotal: %d. Tap a person to open their card.",
 }

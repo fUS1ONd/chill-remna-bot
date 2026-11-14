@@ -59,6 +59,8 @@ type Storage interface {
 	InviteUses(ctx context.Context, code string, limit, offset int) ([]model.InviteUse, int, error)
 	RevokeInvite(ctx context.Context, code string) error
 	RevokeInviteBy(ctx context.Context, code string, author int64) (bool, error)
+	// UserInviteStats — счётчики Приглашений пользователей для владельца.
+	UserInviteStats(ctx context.Context) (model.UserInviteStats, error)
 	DeleteInvite(ctx context.Context, code string) error
 
 	SetAutoPay(ctx context.Context, ap *model.AutoPay) error
@@ -160,6 +162,9 @@ type Storage interface {
 	SetRefBonusPaid(ctx context.Context, telegramID int64) error
 	AddRefEarned(ctx context.Context, telegramID int64, kopecks int64) error
 	CountReferrals(ctx context.Context, referrerID int64) (int, error)
+	// ListReferrals — Telegram ID приглашённых человеком (по Пригласившему),
+	// свежие первыми, и сколько их всего.
+	ListReferrals(ctx context.Context, referrerID int64, limit, offset int) ([]int64, int, error)
 
 	CreateP2PRequest(ctx context.Context, r *model.P2PRequest) error
 	GetP2PRequest(ctx context.Context, id int64) (*model.P2PRequest, error)
@@ -2354,6 +2359,35 @@ func (b *base) CountReferrals(ctx context.Context, referrerID int64) (int, error
 	return n, err
 }
 
+func (b *base) ListReferrals(ctx context.Context, referrerID int64, limit, offset int) ([]int64, int, error) {
+	var total int
+	if err := b.db.QueryRowContext(ctx,
+		"SELECT COUNT(1) FROM users WHERE referred_by = "+b.ph(1), referrerID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if limit <= 0 || total == 0 {
+		return nil, total, nil
+	}
+	rows, err := b.db.QueryContext(ctx,
+		// #nosec G202 -- b.ph выдаёт только placeholder драйвера ($1/?), значения передаются биндовыми параметрами
+		"SELECT telegram_id FROM users WHERE referred_by = "+b.ph(1)+
+			" ORDER BY created_at DESC, telegram_id LIMIT "+b.ph(2)+" OFFSET "+b.ph(3),
+		referrerID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, id)
+	}
+	return out, total, rows.Err()
+}
+
 func (b *base) Ping(ctx context.Context) error { return b.db.PingContext(ctx) }
 
 func (b *base) SetUnreachable(ctx context.Context, telegramID int64, at string) error {
@@ -2779,6 +2813,27 @@ func (b *base) RevokeInviteBy(ctx context.Context, code string, author int64) (b
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+// UserInviteStats считает Приглашения пользователей (Автор не владелец):
+// сколько создано, сколько активаций записано и сколько разных активировавших
+// оплатили хотя бы один платёж.
+func (b *base) UserInviteStats(ctx context.Context) (model.UserInviteStats, error) {
+	var s model.UserInviteStats
+	if err := b.db.QueryRowContext(ctx,
+		"SELECT COUNT(1) FROM invites WHERE created_by <> 0").Scan(&s.Created); err != nil {
+		return s, err
+	}
+	uses := "FROM invite_uses iu JOIN invites i ON i.code = iu.code WHERE i.created_by <> 0"
+	if err := b.db.QueryRowContext(ctx, "SELECT COUNT(1) "+uses).Scan(&s.Activated); err != nil {
+		return s, err
+	}
+	err := b.db.QueryRowContext(ctx,
+		// #nosec G202 -- b.ph выдаёт только placeholder драйвера ($1/?), значения передаются биндовыми параметрами
+		"SELECT COUNT(DISTINCT iu.telegram_id) "+uses+
+			" AND EXISTS (SELECT 1 FROM payments p WHERE p.telegram_id = iu.telegram_id AND p.status = "+b.ph(1)+")",
+		model.PaymentPaid).Scan(&s.Paid)
+	return s, err
 }
 
 func (b *base) RevokeInvite(ctx context.Context, code string) error {

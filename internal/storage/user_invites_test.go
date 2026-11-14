@@ -128,3 +128,68 @@ func checkInvitesAuthorMigration(t *testing.T, st Storage, b *base) {
 		t.Fatalf("старое приглашение после миграции: %+v err=%v", inv, err)
 	}
 }
+
+// Счётчики Приглашений пользователей: создано, активировано и сколько из
+// активировавших оплатили. Админские приглашения не считаются, оплатой
+// считается только оплаченный платёж.
+func TestUserInviteStats(t *testing.T) {
+	eachStore(t, func(t *testing.T, st Storage) {
+		ctx := context.Background()
+		exp := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+		_ = st.CreateInvite(ctx, &model.Invite{Code: "adm", MaxUses: 5, ExpiresAt: exp})
+		for _, c := range []string{"u1", "u2", "u3"} {
+			_ = st.CreateInvite(ctx, &model.Invite{Code: c, MaxUses: 1, ExpiresAt: exp, CreatedBy: 501})
+		}
+		_ = st.CreateInvite(ctx, &model.Invite{Code: "u4", MaxUses: 1, ExpiresAt: exp, CreatedBy: 502})
+		for code, id := range map[string]int64{"adm": 601, "u1": 602, "u2": 603, "u4": 604} {
+			if ok, err := st.UseInvite(ctx, code, id, false); err != nil || !ok {
+				t.Fatalf("активация %s: ok=%v err=%v", code, ok, err)
+			}
+		}
+		for id, status := range map[int64]string{601: model.PaymentPaid, 602: model.PaymentPaid, 603: model.PaymentRefunded} {
+			if err := st.AddPayment(ctx, &model.Payment{TelegramID: id, Method: "yk", Months: 1, Amount: "100", Status: status}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Две оплаты одного человека — один оплативший.
+		_ = st.AddPayment(ctx, &model.Payment{TelegramID: 602, Method: "yk", Months: 1, Amount: "100", Status: model.PaymentPaid})
+
+		s, err := st.UserInviteStats(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s != (model.UserInviteStats{Created: 4, Activated: 3, Paid: 1}) {
+			t.Fatalf("счётчики: %+v", s)
+		}
+	})
+}
+
+// Приглашённые человеком — по Пригласившему, с пагинацией и общим числом.
+func TestListReferrals(t *testing.T) {
+	eachStore(t, func(t *testing.T, st Storage) {
+		ctx := context.Background()
+		for _, id := range []int64{701, 702, 703, 704} {
+			_ = st.UpsertUser(ctx, id)
+		}
+		for _, id := range []int64{702, 703, 704} {
+			ref := int64(701)
+			if id == 704 {
+				ref = 702
+			}
+			if err := st.SetReferredBy(ctx, id, ref); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ids, total, err := st.ListReferrals(ctx, 701, 1, 0)
+		if err != nil || total != 2 || len(ids) != 1 {
+			t.Fatalf("первая страница: %v total=%d err=%v", ids, total, err)
+		}
+		rest, _, _ := st.ListReferrals(ctx, 701, 1, 1)
+		if len(rest) != 1 || rest[0] == ids[0] || (rest[0] != 702 && rest[0] != 703) || (ids[0] != 702 && ids[0] != 703) {
+			t.Fatalf("страницы: %v %v", ids, rest)
+		}
+		if ids, total, _ := st.ListReferrals(ctx, 703, 10, 0); total != 0 || len(ids) != 0 {
+			t.Fatalf("у 703 приглашённых нет: %v %d", ids, total)
+		}
+	})
+}

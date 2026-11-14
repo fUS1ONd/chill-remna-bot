@@ -317,7 +317,10 @@ func (a *App) showAccess(ctx context.Context, chatID int64) {
 		if a.userInvitesToggle() {
 			mark = "✅"
 		}
-		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "access.btn_user_invites", mark), "acc:uinv")})
+		rows = append(rows,
+			[]models.InlineKeyboardButton{btn(i18n.T(lang, "access.btn_user_invites", mark), "acc:uinv")},
+			[]models.InlineKeyboardButton{btn(i18n.T(lang, "access.btn_user_invite_list"), "acc:ulist")},
+		)
 	}
 	if mode != model.AccessWhitelist {
 		rows = append(rows, []models.InlineKeyboardButton{
@@ -337,12 +340,13 @@ func (a *App) showAccess(ctx context.Context, chatID int64) {
 	a.sendKBSection(ctx, chatID, assets.SectionReferral, text, rows)
 }
 
-// inviteStats — сколько приглашений сейчас действует и сколько всего.
+// inviteStats — сколько приглашений владельца сейчас действует и сколько
+// всего; Приглашения пользователей считаются в своём списке.
 func (a *App) inviteStats(ctx context.Context) (active, total int) {
 	if a.store == nil {
 		return 0, 0
 	}
-	list, err := a.store.ListInvites(ctx)
+	list, err := a.store.ListInvitesBy(ctx, 0)
 	if err != nil {
 		return 0, 0
 	}
@@ -358,13 +362,14 @@ func (a *App) inviteStats(ctx context.Context) (active, total int) {
 // invitesPageSize — сколько приглашений показываем на одной странице.
 const invitesPageSize = 10
 
-// showInvites — список приглашений с состоянием и кнопками отзыва/удаления.
+// showInvites — список приглашений владельца с состоянием и кнопками
+// отзыва/удаления. Приглашения пользователей — в showOwnerUserInvites.
 func (a *App) showInvites(ctx context.Context, chatID int64, page int) {
 	lang := a.lang(chatID)
 	if a.store == nil {
 		return
 	}
-	list, err := a.store.ListInvites(ctx)
+	list, err := a.store.ListInvitesBy(ctx, 0)
 	if err != nil {
 		a.sendHome(ctx, chatID, "❌ "+err.Error())
 		return
@@ -454,7 +459,17 @@ func (a *App) showInvite(ctx context.Context, chatID int64, code string) {
 	case !inv.Active(time.Now().UTC()):
 		state = i18n.T(lang, "inv.state_done")
 	}
-	text := i18n.T(lang, "inv.card", state, link, uses, exp) + "\n\n" + i18n.T(lang, "inv.card_hint_"+a.accessMode())
+	text := i18n.T(lang, "inv.card", state, link, uses, exp)
+	// Приглашение пользователя: вместо подсказки владельцу — Автор; удалить
+	// нельзя (пропали бы записи, кто по нему пришёл, и счётчики), только отозвать.
+	userInv := inv.CreatedBy != 0
+	back := "acc:list"
+	if userInv {
+		text += "\n" + i18n.T(lang, "inv.card_author", a.userLabelByID(ctx, inv.CreatedBy))
+		back = "acc:ulist"
+	} else {
+		text += "\n\n" + i18n.T(lang, "inv.card_hint_"+a.accessMode())
+	}
 	rows := [][]models.InlineKeyboardButton{}
 	if _, joined, err := a.store.InviteUses(ctx, inv.Code, 0, 0); err == nil && (joined > 0 || inv.Used > 0) {
 		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "inv.btn_who", joined), "acc:who:"+inv.Code+":0")})
@@ -462,9 +477,11 @@ func (a *App) showInvite(ctx context.Context, chatID int64, code string) {
 	if !inv.Revoked {
 		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "inv.btn_revoke"), "acc:revoke:"+inv.Code)})
 	}
+	if !userInv {
+		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "inv.btn_del"), "acc:del:"+inv.Code)})
+	}
 	rows = append(rows,
-		[]models.InlineKeyboardButton{btn(i18n.T(lang, "inv.btn_del"), "acc:del:"+inv.Code)},
-		[]models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), "acc:list"), btn(i18n.T(lang, "btn.home"), "menu:home")},
+		[]models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), back), btn(i18n.T(lang, "btn.home"), "menu:home")},
 	)
 	a.sendKBSection(ctx, chatID, assets.SectionReferral, text, rows)
 }
@@ -573,9 +590,19 @@ func (a *App) onAccess(ctx context.Context, chatID int64, val string) {
 	case "page":
 		p, _ := strconv.Atoi(arg)
 		a.showInvites(ctx, chatID, p)
+	case "ulist":
+		a.showOwnerUserInvites(ctx, chatID, 0)
+	case "upage":
+		p, _ := strconv.Atoi(arg)
+		a.showOwnerUserInvites(ctx, chatID, p)
 	case "revoke":
 		if a.store != nil && arg != "" {
 			_ = a.store.RevokeInvite(ctx, arg)
+			// Отзыв Приглашения пользователя возвращает в их список.
+			if inv, err := a.store.GetInvite(ctx, arg); err == nil && inv != nil && inv.CreatedBy != 0 {
+				a.showOwnerUserInvites(ctx, chatID, 0)
+				return
+			}
 		}
 		a.showInvites(ctx, chatID, 0)
 	case "del":

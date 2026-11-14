@@ -579,6 +579,31 @@ func (s *fakeStore) ListInvites(context.Context) ([]model.Invite, error) {
 	return out, nil
 }
 
+func (s *fakeStore) UserInviteStats(context.Context) (model.UserInviteStats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var st model.UserInviteStats
+	for _, inv := range s.invites {
+		if inv.CreatedBy != 0 {
+			st.Created++
+		}
+	}
+	paid := map[int64]bool{}
+	for _, u := range s.inviteUses {
+		if inv := s.invites[u.Code]; inv == nil || inv.CreatedBy == 0 {
+			continue
+		}
+		st.Activated++
+		for _, p := range s.pays {
+			if p.TelegramID == u.TelegramID && p.Status == model.PaymentPaid {
+				paid[u.TelegramID] = true
+			}
+		}
+	}
+	st.Paid = len(paid)
+	return st, nil
+}
+
 func (s *fakeStore) UseInvite(_ context.Context, code string, telegramID int64, open bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2090,6 +2115,23 @@ func (s *fakeStore) CountReferrals(_ context.Context, ref int64) (int, error) {
 		}
 	}
 	return n, nil
+}
+func (s *fakeStore) ListReferrals(_ context.Context, ref int64, limit, offset int) ([]int64, int, error) {
+	var all []int64
+	for id, u := range s.users {
+		if u.ReferredBy == ref {
+			all = append(all, id)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
+	if limit <= 0 || offset >= len(all) {
+		return nil, len(all), nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], len(all), nil
 }
 func (s *fakeStore) CreateP2PRequest(_ context.Context, r *model.P2PRequest) error {
 	s.mu.Lock()
