@@ -281,7 +281,9 @@ func itoaMonths(m int) string {
 // MiniReferral mirrors showReferral: link, referral count and bonus terms.
 func (a *App) MiniReferral(ctx context.Context, tgID int64) web.MiniReferralDTO {
 	cfg := a.referralCfg()
-	if !cfg.Enabled {
+	// С Приглашениями от пользователей ref_-ссылка не показывается: бонусы и
+	// счётчики живут на экране приглашений (MiniInvites).
+	if !cfg.Enabled || a.userInvitesOn() {
 		return web.MiniReferralDTO{Enabled: false}
 	}
 	count := 0

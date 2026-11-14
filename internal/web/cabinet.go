@@ -209,6 +209,12 @@ func (s *Server) handleCabinetTelegramAuth(w http.ResponseWriter, r *http.Reques
 		s.mini.MiniStart(ctx, tgID, st, true)
 	}
 	s.mini.CabinetEnsureUser(ctx, tgID)
+	// Закрытый вход отказывает тем же признаком, что и ручки мини-аппа:
+	// страница входа рисует экран отказа, а не всплывающую ошибку.
+	if s.mini.MiniAccessDenied(ctx, tgID) {
+		s.writeAccessDenied(ctx, w, tgID)
+		return
+	}
 	if err := s.mini.CabinetGate(ctx, tgID, false); err != nil {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 		return

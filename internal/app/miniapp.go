@@ -52,9 +52,13 @@ func (a *App) MiniMenu(ctx context.Context, tgID int64, web_ bool) web.MiniMenuD
 	dto := web.MiniMenuDTO{
 		HasSub:         a.userHasSub(ctx, tgID),
 		TrialAvailable: a.trialAvailable(ctx, tgID),
-		ReferralOn:     a.referralCfg().Enabled,
-		TopUpOn:        a.topUpEnabled(),
-		SupportURL:     a.supportURL(),
+		// Как в главном меню чата: с Приглашениями от пользователей
+		// «Пригласить друга» заменяет рефералку, а без права — ни того, ни
+		// другого.
+		ReferralOn:  a.referralCfg().Enabled && !a.userInvitesOn(),
+		UserInvites: a.canInviteFriends(ctx, tgID),
+		TopUpOn:     a.topUpEnabled(),
+		SupportURL:  a.supportURL(),
 	}
 	if dto.HasSub {
 		dto.CanRenew = a.renewEligible(ctx, tgID)

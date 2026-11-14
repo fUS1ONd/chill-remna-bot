@@ -139,27 +139,55 @@ func (a *App) inviteShareURL(ctx context.Context, lang, code string) string {
 	if link == "" {
 		return ""
 	}
+	return "https://t.me/share/url?url=" + url.QueryEscape(link) + "&text=" + url.QueryEscape(a.inviteShareBody(lang, code))
+}
+
+// inviteShareBody — текст «Поделиться» без Telegram-ссылки (её выбор чата
+// подставляет сам): приглашение и ссылка кабинета, если он включён.
+func (a *App) inviteShareBody(lang, code string) string {
 	text := i18n.T(lang, "uinv.share_text")
 	if cab := a.inviteCabinetLink(code); cab != "" {
 		text += "\n" + i18n.T(lang, "uinv.share_cabinet", cab)
 	}
-	return "https://t.me/share/url?url=" + url.QueryEscape(link) + "&text=" + url.QueryEscape(text)
+	return text
+}
+
+// inviteShareText — тот же текст со всеми ссылками для «Скопировать» в
+// браузере, где выбора чата Telegram нет.
+func (a *App) inviteShareText(ctx context.Context, lang, code string) string {
+	text := i18n.T(lang, "uinv.share_text")
+	if link := a.inviteLink(ctx, code); link != "" {
+		text += "\n" + link
+	}
+	if cab := a.inviteCabinetLink(code); cab != "" {
+		text += "\n" + i18n.T(lang, "uinv.share_cabinet", cab)
+	}
+	return text
 }
 
 // userInviteBonus — блок бонусов рефералки на экране приглашений; пусто, когда
 // рефералка выключена или человек бессрочный (ему бонусы не начисляются).
 func (a *App) userInviteBonus(ctx context.Context, chatID int64, lang string) string {
-	cfg := a.referralCfg()
-	if !cfg.Enabled || a.subPerpetual(ctx, chatID) {
+	cfg, count, earned, ok := a.userInviteBonusData(ctx, chatID)
+	if !ok {
 		return ""
 	}
 	bonus, when, extra := referralTerms(cfg, lang)
-	count, _ := a.store.CountReferrals(ctx, chatID)
-	earned := int64(0)
+	return i18n.T(lang, "uinv.bonus", bonus, when, extra, count, kopecksToRub(earned))
+}
+
+// userInviteBonusData — условия рефералки и счётчики Автора для блока
+// бонусов; ok=false — блока нет (рефералка выключена или человек бессрочный).
+func (a *App) userInviteBonusData(ctx context.Context, chatID int64) (cfg model.ReferralConfig, count int, earned int64, ok bool) {
+	cfg = a.referralCfg()
+	if !cfg.Enabled || a.subPerpetual(ctx, chatID) {
+		return cfg, 0, 0, false
+	}
+	count, _ = a.store.CountReferrals(ctx, chatID)
 	if u, _ := a.store.GetUser(ctx, chatID); u != nil {
 		earned = u.RefEarned
 	}
-	return i18n.T(lang, "uinv.bonus", bonus, when, extra, count, kopecksToRub(earned))
+	return cfg, count, earned, true
 }
 
 // showUserInvites — экран «Пригласить друга». notice — строка итога действия
@@ -220,6 +248,31 @@ func (a *App) showUserInvites(ctx context.Context, chatID int64, notice string) 
 	a.sendKBSection(ctx, chatID, assets.SectionReferral, b.String(), rows)
 }
 
+// userInviteRefusal — текст отказа createUserInvite по его ключу.
+func userInviteRefusal(lang, reason string) string {
+	var args []any
+	switch reason {
+	case "uinv.limit_active":
+		args = []any{userInviteMaxActive}
+	case "uinv.limit_day":
+		args = []any{userInviteMaxPerDay}
+	}
+	return i18n.T(lang, reason, args...)
+}
+
+// revokeUserInvite отзывает своё неиспользованное Приглашение. Отзыв своего
+// не зависит от паузы: условие «своё и неиспользованное» проверяет сам запрос.
+func (a *App) revokeUserInvite(ctx context.Context, chatID int64, code string) bool {
+	if a.store == nil || code == "" {
+		return false
+	}
+	ok, err := a.store.RevokeInviteBy(ctx, code, chatID)
+	if err != nil {
+		a.log.Warn("user invite: отзыв", "tg_id", chatID, "code", code, "err", err)
+	}
+	return ok
+}
+
 // onUserInvite — кнопки экрана «Пригласить друга».
 func (a *App) onUserInvite(ctx context.Context, chatID int64, val string) {
 	lang := a.lang(chatID)
@@ -227,29 +280,14 @@ func (a *App) onUserInvite(ctx context.Context, chatID int64, val string) {
 	switch action {
 	case "new":
 		if _, reason := a.createUserInvite(ctx, chatID); reason != "" {
-			var args []any
-			switch reason {
-			case "uinv.limit_active":
-				args = []any{userInviteMaxActive}
-			case "uinv.limit_day":
-				args = []any{userInviteMaxPerDay}
-			}
-			a.showUserInvites(ctx, chatID, i18n.T(lang, reason, args...))
+			a.showUserInvites(ctx, chatID, userInviteRefusal(lang, reason))
 			return
 		}
 		a.showUserInvites(ctx, chatID, i18n.T(lang, "uinv.created"))
 	case "revoke":
 		notice := i18n.T(lang, "uinv.revoke_none")
-		// Отзыв своего не зависит от паузы: условие «своё и неиспользованное»
-		// проверяет сам запрос.
-		if a.store != nil && arg != "" {
-			ok, err := a.store.RevokeInviteBy(ctx, arg, chatID)
-			if err != nil {
-				a.log.Warn("user invite: отзыв", "tg_id", chatID, "code", arg, "err", err)
-			}
-			if ok {
-				notice = i18n.T(lang, "uinv.revoked")
-			}
+		if a.revokeUserInvite(ctx, chatID, arg) {
+			notice = i18n.T(lang, "uinv.revoked")
 		}
 		a.showUserInvites(ctx, chatID, notice)
 	default:

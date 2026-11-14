@@ -44,22 +44,30 @@ func (a *App) denyAccess(ctx context.Context, chatID int64, isAdmin bool) bool {
 	// список» — только тех, кому доступ уже выдан (приглашение выдаёт тот же
 	// флаг, поэтому смена режима никого не выкидывает).
 	switch a.accessMode() {
-	case model.AccessInvite:
+	case model.AccessInvite, model.AccessWhitelist:
 		if a.store != nil && !a.accessGranted(ctx, chatID) {
-			key := "user.need_invite"
-			if a.userInvitesOn() {
-				key = "uinv.need_invite"
-			}
-			a.send(ctx, chatID, i18n.T(a.lang(chatID), key))
-			return true
-		}
-	case model.AccessWhitelist:
-		if a.store != nil && !a.accessGranted(ctx, chatID) {
-			a.send(ctx, chatID, i18n.T(a.lang(chatID), "user.not_whitelisted"))
+			a.send(ctx, chatID, i18n.T(a.lang(chatID), a.denyTextKey()))
 			return true
 		}
 	}
 	return false
+}
+
+// denyTextKey — ключ текста отказа человеку без Доступа в текущем режиме.
+func (a *App) denyTextKey() string {
+	switch {
+	case a.accessMode() == model.AccessWhitelist:
+		return "user.not_whitelisted"
+	case a.userInvitesOn():
+		return "uinv.need_invite"
+	}
+	return "user.need_invite"
+}
+
+// MiniDenyText — текст отказа для экрана отказа мини-аппа и кабинета: тот же,
+// что в чате, без разметки.
+func (a *App) MiniDenyText(_ context.Context, tgID int64) string {
+	return stripHTMLTags(i18n.T(a.lang(tgID), a.denyTextKey()))
 }
 
 func (a *App) showUsers(ctx context.Context, chatID int64, page int) {

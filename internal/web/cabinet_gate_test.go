@@ -26,6 +26,10 @@ type fakeMini struct {
 	start   string
 	payURL  string
 	since   int64
+	// denied — человека не пускает Закрытый вход; invites — что видел
+	// двойник ручек Приглашений.
+	denied  bool
+	invites []string
 }
 
 const fakeBotToken = "123456:TESTTOKEN"
@@ -48,7 +52,7 @@ func (f *fakeMini) CabinetBotUsername() string {
 }
 func (f *fakeMini) SessionEpoch(context.Context, int64) int         { return f.epoch }
 func (f *fakeMini) MiniBlocked(context.Context, int64) bool         { return false }
-func (f *fakeMini) MiniAccessDenied(context.Context, int64) bool    { return false }
+func (f *fakeMini) MiniAccessDenied(context.Context, int64) bool    { return f.denied }
 func (f *fakeMini) MiniLegalRequired(context.Context, int64) bool   { return false }
 func (f *fakeMini) CabinetGate(context.Context, int64, bool) error  { return nil }
 func (f *fakeMini) CabinetMoneyBlocked(context.Context, int64) bool { return f.blocked }
