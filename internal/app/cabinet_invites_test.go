@@ -205,3 +205,21 @@ func TestCabinetDenied_NoAccess(t *testing.T) {
 		t.Fatal("отклонённый привязал Telegram без Доступа")
 	}
 }
+
+// Явная модерация кабинета для входа по почте действует и с Приглашением —
+// как модерация Telegram-входа для пришедшего по Приглашению в чате: Доступ
+// выдан, но в кабинет пустит одобрение владельца.
+func TestCabinetRegisterInvite_ExplicitModerationQueues(t *testing.T) {
+	a, _, fs := cabInvApp(t)
+	ctx := context.Background()
+	a.botCfg.Cabinet.Approval = model.CabinetApprovalEmail
+	userInvite(t, fs, "c1", uinvAuthor)
+	_, err := a.CabinetEmailRegister(ctx, "mod@example.com", "password1", "inv_c1")
+	if err == nil || !strings.Contains(err.Error(), "ожидает одобрения") {
+		t.Fatalf("модерация почты пропущена: %v", err)
+	}
+	wu, _ := fs.GetWebUserByEmail(ctx, "mod@example.com")
+	if u, _ := fs.GetUser(ctx, wu.TgID); u == nil || !u.Whitelisted || inviteUsed(t, fs, "c1") != 1 {
+		t.Fatalf("Доступ по Приглашению не выдан: %+v", u)
+	}
+}
