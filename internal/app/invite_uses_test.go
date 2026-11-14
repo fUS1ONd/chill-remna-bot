@@ -116,7 +116,7 @@ func TestInviteUses_DeleteClears(t *testing.T) {
 	ctx := context.Background()
 	a.setAccessMode(ctx, model.AccessInvite, false)
 	_ = fs.CreateInvite(ctx, &model.Invite{Code: "gone", MaxUses: 0})
-	if _, ok := a.redeemInvite(ctx, 1000000007, "gone"); !ok {
+	if _, ok := a.redeemInvite(ctx, 1000000007, "gone", "", ""); !ok {
 		t.Fatal("приглашение не сработало")
 	}
 	a.onAccess(ctx, 100, "del:gone")

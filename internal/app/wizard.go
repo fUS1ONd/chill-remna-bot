@@ -224,6 +224,8 @@ func (a *App) handleCallback(ctx context.Context, cq *models.CallbackQuery) {
 		a.onYKCheck(ctx, chatID, val)
 	case cbAutoPay:
 		a.onAutoPayUser(ctx, chatID, val)
+	case cbUserInvite:
+		a.onUserInvite(ctx, chatID, val)
 	case cbAccess:
 		if isAdmin {
 			a.onAccess(ctx, chatID, val)

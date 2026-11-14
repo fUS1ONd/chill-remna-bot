@@ -227,6 +227,13 @@ type App struct {
 	// конвертировался бы дважды. Берётся ПОСЛЕ finalizeLk, порядок строгий.
 	finalizeUserLk [finalizeLockShards]sync.Mutex
 
+	// userInviteMu сериализует проверку лимитов и создание Приглашений от
+	// пользователей: двойное нажатие не проскакивает лимит активных.
+	userInviteMu sync.Mutex
+	// redeemLk сериализует активацию Приглашений по человеку (striped): два
+	// кода подряд не тратят второй.
+	redeemLk [finalizeLockShards]sync.Mutex
+
 	// checkoutLk сериализует оплату с баланса из мини-аппа по «человек+тариф+
 	// срок». Запросы веб-сервера идут параллельно (в чате апдейты по
 	// очереди), а ключ сделки там строится из конца срока, прочитанного ДО
@@ -895,7 +902,7 @@ func (a *App) handleMessage(ctx context.Context, m *models.Message) {
 	// приглашённый упрётся в «нужно приглашение» и ссылка никогда не сработает.
 	if !isAdmin && strings.HasPrefix(text, "/start ") {
 		if code, isInv := strings.CutPrefix(strings.TrimSpace(strings.TrimPrefix(text, "/start ")), "inv_"); isInv && code != "" {
-			if msg, ok := a.redeemInvite(ctx, chatID, code); msg != "" {
+			if msg, ok := a.redeemInvite(ctx, chatID, code, username, firstName); msg != "" {
 				a.msg.Delete(ctx, chatID, m.ID)
 				a.send(ctx, chatID, msg)
 				if !ok {

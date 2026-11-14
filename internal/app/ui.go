@@ -619,7 +619,13 @@ func (a *App) showMenu(ctx context.Context, chatID int64, isAdmin bool, name str
 		if row := a.miniAppButtonRow(lang); row != nil {
 			rows = append(rows, row)
 		}
-		if a.referralCfg().Enabled {
+		// С Приглашениями от пользователей «Пригласить друга» заменяет
+		// рефералку: ref_-ссылка в этом режиме не показывается.
+		switch {
+		case a.canInviteFriends(ctx, chatID):
+			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.user_invites"), "menu:"+cbUserInvite)})
+		case a.userInvitesOn():
+		case a.referralCfg().Enabled:
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.referral"), "menu:ref")})
 		}
 		if row := a.legalMenuRow(lang); row != nil {
@@ -681,7 +687,13 @@ func (a *App) onMenu(ctx context.Context, chatID int64, val string, isAdmin bool
 	case "balance":
 		a.showBalance(ctx, chatID)
 	case "ref":
+		if a.userInvitesOn() {
+			a.showUserInvites(ctx, chatID, "")
+			return
+		}
 		a.showReferral(ctx, chatID)
+	case cbUserInvite:
+		a.showUserInvites(ctx, chatID, "")
 	case "refadmin":
 		if isAdmin {
 			a.showReferralAdmin(ctx, chatID)

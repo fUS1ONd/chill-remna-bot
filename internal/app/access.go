@@ -176,8 +176,10 @@ func (a *App) inviteLink(ctx context.Context, code string) string {
 }
 
 // redeemInvite активирует приглашение по коду из /start. Возвращает текст для
-// пользователя (пустой — если делать нечего) и признак успеха.
-func (a *App) redeemInvite(ctx context.Context, chatID int64, code string) (string, bool) {
+// пользователя (пустой — если делать нечего) и признак успеха. username и
+// firstName записываются новичку сразу после создания строки, чтобы
+// уведомления об активации назвали его по имени.
+func (a *App) redeemInvite(ctx context.Context, chatID int64, code, username, firstName string) (string, bool) {
 	lang := a.lang(chatID)
 	code = strings.ToLower(strings.TrimSpace(code))
 	if a.store == nil || code == "" {
@@ -193,6 +195,11 @@ func (a *App) redeemInvite(ctx context.Context, chatID int64, code string) (stri
 		// открывала бы вход в закрытый бот.
 		return "", false
 	}
+	// Два кода одним человеком подряд: второй видит уже выданный Доступ и не
+	// тратится.
+	lk := &a.redeemLk[extLockIndex(strconv.FormatInt(chatID, 10))]
+	lk.Lock()
+	defer lk.Unlock()
 	// Забаненный не должен сжигать активацию чужого приглашения.
 	if a.userBlocked(ctx, chatID) {
 		return "", false
@@ -201,24 +208,54 @@ func (a *App) redeemInvite(ctx context.Context, chatID int64, code string) (stri
 		// Доступ уже есть — приглашение не тратим.
 		return "", true
 	}
+	inv, err := a.store.GetInvite(ctx, code)
+	author := int64(0)
+	if inv != nil {
+		author = inv.CreatedBy
+	}
+	// Отказ по Приглашению от пользователя (и по неизвестному коду, пока
+	// приглашают пользователи) зовёт к другу, а не к администратору.
+	bad := "inv.bad"
+	if author != 0 || (inv == nil && a.userInvitesOn()) {
+		bad = "uinv.bad"
+	}
+	if err != nil {
+		a.log.Warn("invite: чтение", "code", code, "err", err)
+		return i18n.T(lang, bad), false
+	}
+	// Пауза: тумблер выключен, Автор заблокирован или лишён Доступа.
+	if author != 0 && !a.canInviteFriends(ctx, author) {
+		return i18n.T(lang, bad), false
+	}
 	ok, err := a.store.UseInvite(ctx, code, chatID, false)
 	if err != nil {
 		a.log.Warn("invite: активация", "code", code, "err", err)
-		return i18n.T(lang, "inv.bad"), false
+		return i18n.T(lang, bad), false
 	}
 	if !ok {
-		return i18n.T(lang, "inv.bad"), false
+		return i18n.T(lang, bad), false
+	}
+	// Автор становится Пригласившим через логику рефералки, как при
+	// ref_<Автор>. Строго ДО UpsertUser: bindReferrer привязывает только
+	// новичка без строки в базе.
+	if author != 0 {
+		a.bindReferrer(ctx, chatID, refPayload(author), false)
 	}
 	_ = a.store.UpsertUser(ctx, chatID)
+	a.rememberUser(ctx, chatID, username, firstName)
 	if err := a.store.SetWhitelisted(ctx, chatID, true); err != nil {
 		// Активация уже списана, но доступа нет — честно говорим об этом и
 		// зовём в поддержку, а не рисуем «добро пожаловать».
 		a.log.Error("invite: выдача доступа", "tg_id", chatID, "err", err)
 		return i18n.T(lang, "inv.grant_failed"), false
 	}
-	a.log.Info("invite: доступ выдан", "tg_id", chatID, "code", code)
-	alang := a.lang(a.cfg.AdminID)
-	a.notify(ctx, a.cfg.AdminID, i18n.T(alang, "inv.used_admin", code, a.userLabelByID(ctx, chatID)))
+	a.log.Info("invite: доступ выдан", "tg_id", chatID, "code", code, "author", author)
+	if author != 0 {
+		a.notifyUserInviteUsed(ctx, author, chatID)
+	} else {
+		alang := a.lang(a.cfg.AdminID)
+		a.notify(ctx, a.cfg.AdminID, i18n.T(alang, "inv.used_admin", code, a.userLabelByID(ctx, chatID)))
+	}
 	return i18n.T(lang, "inv.ok"), true
 }
 
@@ -265,6 +302,13 @@ func (a *App) showAccess(ctx context.Context, chatID int64) {
 		{pick(model.AccessPublic, "access.btn_public")},
 		{pick(model.AccessInvite, "access.btn_invite")},
 		{pick(model.AccessWhitelist, "access.btn_whitelist")},
+	}
+	if mode == model.AccessInvite {
+		mark := "❌"
+		if a.userInvitesToggle() {
+			mark = "✅"
+		}
+		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "access.btn_user_invites", mark), "acc:uinv")})
 	}
 	if mode != model.AccessWhitelist {
 		rows = append(rows, []models.InlineKeyboardButton{
@@ -508,6 +552,9 @@ func (a *App) onAccess(ctx context.Context, chatID int64, val string) {
 				a.notify(ctx, chatID, i18n.T(lang, "access.grandfathered", n))
 			}
 		}
+		a.showAccess(ctx, chatID)
+	case "uinv":
+		a.toggleUserInvites(ctx)
 		a.showAccess(ctx, chatID)
 	case "new":
 		a.getUI(chatID).adminInput = "inv_days"

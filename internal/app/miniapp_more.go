@@ -40,7 +40,7 @@ func (a *App) MiniStart(ctx context.Context, tgID int64, param string, cabinet b
 	param = strings.TrimSpace(param)
 	notice := ""
 	if code, ok := strings.CutPrefix(param, "inv_"); ok && code != "" {
-		if msg, _ := a.redeemInvite(ctx, tgID, code); msg != "" {
+		if msg, _ := a.redeemInvite(ctx, tgID, code, "", ""); msg != "" {
 			notice = stripHTMLTags(msg)
 		}
 	}

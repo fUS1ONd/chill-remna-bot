@@ -46,7 +46,11 @@ func (a *App) denyAccess(ctx context.Context, chatID int64, isAdmin bool) bool {
 	switch a.accessMode() {
 	case model.AccessInvite:
 		if a.store != nil && !a.accessGranted(ctx, chatID) {
-			a.send(ctx, chatID, i18n.T(a.lang(chatID), "user.need_invite"))
+			key := "user.need_invite"
+			if a.userInvitesOn() {
+				key = "uinv.need_invite"
+			}
+			a.send(ctx, chatID, i18n.T(a.lang(chatID), key))
 			return true
 		}
 	case model.AccessWhitelist:

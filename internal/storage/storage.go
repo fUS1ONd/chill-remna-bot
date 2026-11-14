@@ -54,9 +54,11 @@ type Storage interface {
 	CreateInvite(ctx context.Context, inv *model.Invite) error
 	GetInvite(ctx context.Context, code string) (*model.Invite, error)
 	ListInvites(ctx context.Context) ([]model.Invite, error)
+	ListInvitesBy(ctx context.Context, author int64) ([]model.Invite, error)
 	UseInvite(ctx context.Context, code string, telegramID int64, open bool) (bool, error)
 	InviteUses(ctx context.Context, code string, limit, offset int) ([]model.InviteUse, int, error)
 	RevokeInvite(ctx context.Context, code string) error
+	RevokeInviteBy(ctx context.Context, code string, author int64) (bool, error)
 	DeleteInvite(ctx context.Context, code string) error
 
 	SetAutoPay(ctx context.Context, ap *model.AutoPay) error
@@ -2622,47 +2624,64 @@ func (b *base) CreateInvite(ctx context.Context, inv *model.Invite) error {
 		inv.CreatedAt = nowStr()
 	}
 	// #nosec G202 -- b.ph выдаёт только placeholder драйвера ($1/?), значения передаются биндовыми параметрами
+	if inv.Grant == "" {
+		inv.Grant = model.InviteGrantAccess
+	}
 	_, err := b.db.ExecContext(ctx,
-		"INSERT INTO invites (code, max_uses, used, expires_at, created_at, revoked, note) "+
-			"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+")",
-		inv.Code, inv.MaxUses, inv.Used, inv.ExpiresAt, inv.CreatedAt, boolToInt(inv.Revoked), inv.Note)
+		"INSERT INTO invites (code, max_uses, used, expires_at, created_at, revoked, note, created_by, grant_kind) "+
+			"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+")",
+		inv.Code, inv.MaxUses, inv.Used, inv.ExpiresAt, inv.CreatedAt, boolToInt(inv.Revoked), inv.Note, inv.CreatedBy, inv.Grant)
 	return err
 }
 
-func (b *base) GetInvite(ctx context.Context, code string) (*model.Invite, error) {
+// inviteCols — колонки приглашения в порядке scanInvite.
+const inviteCols = "code, max_uses, used, expires_at, created_at, revoked, note, created_by, grant_kind"
+
+func scanInvite(sc interface{ Scan(...any) error }) (model.Invite, error) {
 	var inv model.Invite
 	var revoked int
-	err := b.db.QueryRowContext(ctx,
-		"SELECT code, max_uses, used, expires_at, created_at, revoked, note FROM invites WHERE code = "+b.ph(1), code).
-		Scan(&inv.Code, &inv.MaxUses, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt, &revoked, &inv.Note)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
+	err := sc.Scan(&inv.Code, &inv.MaxUses, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt, &revoked, &inv.Note, &inv.CreatedBy, &inv.Grant)
 	inv.Revoked = revoked != 0
-	return &inv, nil
+	return inv, err
 }
 
-func (b *base) ListInvites(ctx context.Context) ([]model.Invite, error) {
-	rows, err := b.db.QueryContext(ctx,
-		"SELECT code, max_uses, used, expires_at, created_at, revoked, note FROM invites ORDER BY created_at DESC")
+func (b *base) queryInvites(ctx context.Context, q string, args ...any) ([]model.Invite, error) {
+	rows, err := b.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []model.Invite
 	for rows.Next() {
-		var inv model.Invite
-		var revoked int
-		if err := rows.Scan(&inv.Code, &inv.MaxUses, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt, &revoked, &inv.Note); err != nil {
+		inv, err := scanInvite(rows)
+		if err != nil {
 			return nil, err
 		}
-		inv.Revoked = revoked != 0
 		out = append(out, inv)
 	}
 	return out, rows.Err()
+}
+
+func (b *base) GetInvite(ctx context.Context, code string) (*model.Invite, error) {
+	inv, err := scanInvite(b.db.QueryRowContext(ctx,
+		"SELECT "+inviteCols+" FROM invites WHERE code = "+b.ph(1), code))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &inv, nil
+}
+
+func (b *base) ListInvites(ctx context.Context) ([]model.Invite, error) {
+	return b.queryInvites(ctx, "SELECT "+inviteCols+" FROM invites ORDER BY created_at DESC")
+}
+
+// ListInvitesBy — Приглашения одного Автора, свежие первыми.
+func (b *base) ListInvitesBy(ctx context.Context, author int64) ([]model.Invite, error) {
+	return b.queryInvites(ctx,
+		"SELECT "+inviteCols+" FROM invites WHERE created_by = "+b.ph(1)+" ORDER BY created_at DESC, code", author)
 }
 
 // UseInvite тратит одну активацию приглашения и записывает, кто пришёл.
@@ -2745,6 +2764,21 @@ func (b *base) InviteUses(ctx context.Context, code string, limit, offset int) (
 		out = append(out, u)
 	}
 	return out, total, rows.Err()
+}
+
+// RevokeInviteBy — отзыв Автором: только своё и только неиспользованное.
+// Условие стоит в самом запросе, поэтому гонку с активацией (UseInvite)
+// решает база: кто первый, тот и прав. false — отзывать нечего.
+func (b *base) RevokeInviteBy(ctx context.Context, code string, author int64) (bool, error) {
+	res, err := b.db.ExecContext(ctx,
+		// #nosec G202 -- b.ph выдаёт только placeholder драйвера ($1/?), значения передаются биндовыми параметрами
+		"UPDATE invites SET revoked = 1 WHERE code = "+b.ph(1)+" AND created_by = "+b.ph(2)+
+			" AND revoked = 0 AND (max_uses <= 0 OR used < max_uses)", code, author)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func (b *base) RevokeInvite(ctx context.Context, code string) error {

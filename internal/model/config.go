@@ -75,7 +75,15 @@ type Invite struct {
 	CreatedAt string
 	Revoked   bool
 	Note      string
+	// CreatedBy — Автор приглашения: 0 — владелец, иначе Telegram ID
+	// пользователя (Приглашение от пользователя).
+	CreatedBy int64
+	// Grant — что выдаёт активация; пусто при записи — InviteGrantAccess.
+	Grant string
 }
+
+// InviteGrantAccess — приглашение выдаёт только Доступ.
+const InviteGrantAccess = "access"
 
 // InviteUse — человек, пришедший по приглашению.
 type InviteUse struct {
@@ -156,6 +164,11 @@ type BotConfig struct {
 	Reminders RemindersConfig `json:"reminders"`
 	Referral  ReferralConfig  `json:"referral"`
 	MoyNalog  MoyNalogConfig  `json:"moynalog"`
+
+	// UserInvites — тумблер «Приглашают пользователи»: в режиме «По
+	// приглашениям» любой с Доступом создаёт Приглашения для друзей. В других
+	// режимах не действует.
+	UserInvites bool `json:"user_invites,omitempty"`
 
 	// WhitelistMode — legacy-флаг «вайтлист включён». Оставлен ради обратной
 	// совместимости со старыми конфигами и старым UI; актуальное состояние
