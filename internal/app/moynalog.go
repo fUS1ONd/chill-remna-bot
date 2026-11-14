@@ -91,6 +91,11 @@ func (a *App) issueReceipt(ctx context.Context, provider, extID string, kopecks 
 		Marker:   marker,
 		IncomeAt: incomeAt.UTC().Format(time.RFC3339),
 	}
+	// Столбление и алерт — своим контекстом: контекст запроса (вебхук живёт
+	// 15 с) мог истечь за время финализации, и тогда чек пропал бы молча — ни
+	// строки, ни алерта.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
 	claimed, err := a.store.ClaimReceipt(ctx, r)
 	if err != nil {
 		a.log.Error("moynalog: чек не застолблён", "err", err, "provider", provider, "ext", extID)

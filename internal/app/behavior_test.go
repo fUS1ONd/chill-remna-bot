@@ -1199,7 +1199,11 @@ func (s *fakeStore) MostPopularPlan(_ context.Context) (int, int, error) {
 	}
 	return best, total, nil
 }
-func (s *fakeStore) ClaimReceipt(_ context.Context, r *model.Receipt) (bool, error) {
+func (s *fakeStore) ClaimReceipt(ctx context.Context, r *model.Receipt) (bool, error) {
+	// Как настоящая база: истёкший контекст запроса строку не вставляет.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.receipts == nil {

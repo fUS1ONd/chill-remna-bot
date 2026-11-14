@@ -174,6 +174,20 @@ func TestReceipt_ClaimedBeforeFNS(t *testing.T) {
 	}
 }
 
+// Контекст вебхука истёк к моменту чека (финализация заняла его 15 с): право
+// на чек всё равно столбится, и чек пробивается.
+func TestReceipt_ExpiredRequestContextStillClaims(t *testing.T) {
+	a, _, fs, fns := receiptApp(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a.issueReceipt(ctx, model.PayMethodYooKassa, "yk-late", 15000, "Подписка", time.Now())
+	a.moneyWG.Wait()
+	r, _ := fs.GetReceipt(context.Background(), model.PayMethodYooKassa, "yk-late")
+	if r == nil || r.State != model.ReceiptCreated || len(fns.calls()) != 1 {
+		t.Fatalf("чек потерян на истёкшем контексте: %+v, вызовов %d", r, len(fns.calls()))
+	}
+}
+
 // Процесс упал, пока ФНС принимала доход: исход не записан. Плановый проход
 // второй чек не пробивает, а сверяет по метке и находит первый.
 func TestReceiptPass_CrashDuringCreateNoSecondReceipt(t *testing.T) {
