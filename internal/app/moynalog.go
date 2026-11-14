@@ -169,6 +169,18 @@ func (a *App) processReceipt(ctx context.Context, provider, extID string) {
 func (a *App) createIncome(ctx context.Context, client moyNalogAPI, r *model.Receipt) {
 	incomeAt, _ := time.Parse(time.RFC3339, r.IncomeAt)
 
+	// Запись исхода — своим контекстом: контекст обращения к ФНС мог истечь,
+	// а без записи пробитый чек остался бы pending и ушёл бы в ФНС ещё раз.
+	saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer saveCancel()
+	// На время обращения чек — unknown: если процесс упадёт после приёма
+	// дохода ФНС, следующий проход сверит его по метке, а не пробьёт второй.
+	// Не записалось — к ФНС не идём: исход потом записать тоже не выйдет.
+	if err := a.store.MarkReceiptSending(saveCtx, r.Provider, r.ExtID, "обращение к ФНС не завершилось"); err != nil {
+		a.log.Error("moynalog: чек не отмечен перед пробитием", "err", err, "ext", r.ExtID)
+		return
+	}
+
 	callCtx, cancel := context.WithTimeout(ctx, receiptTimeout)
 	defer cancel()
 	uuid, err := client.CreateIncome(callCtx, moynalog.Income{
@@ -176,14 +188,10 @@ func (a *App) createIncome(ctx context.Context, client moyNalogAPI, r *model.Rec
 		Name:          r.Name,
 		OperationTime: incomeAt,
 	})
-	// Запись исхода — своим контекстом: контекст обращения к ФНС мог истечь,
-	// а без записи пробитый чек остался бы pending и ушёл бы в ФНС ещё раз.
-	saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-	defer saveCancel()
 	if err == nil {
 		if serr := a.store.SetReceiptResult(saveCtx, r.Provider, r.ExtID, model.ReceiptCreated, uuid, ""); serr != nil {
-			// Чек в ФНС есть, а в базе он pending — следующий проход пробил бы
-			// второй. Уводим в unknown: сверка по метке найдёт этот же чек.
+			// Чек в ФНС есть, а uuid не записан. Строка осталась unknown —
+			// сверка по метке найдёт этот же чек.
 			a.log.Error("moynalog: чек пробит, но не записан", "err", serr, "ext", r.ExtID, "uuid", uuid)
 			_ = a.store.SetReceiptResult(saveCtx, r.Provider, r.ExtID, model.ReceiptUnknown, "", "чек пробит, uuid не записался: "+uuid)
 			return

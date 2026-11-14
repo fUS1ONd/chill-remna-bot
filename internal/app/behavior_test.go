@@ -1240,6 +1240,16 @@ func (s *fakeStore) SetReceiptResult(_ context.Context, provider, extID, state, 
 	return nil
 }
 
+func (s *fakeStore) MarkReceiptSending(_ context.Context, provider, extID, note string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.receipts[provider+"/"+extID]; ok {
+		r.State, r.LastError = model.ReceiptUnknown, note
+		r.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	return nil
+}
+
 func (s *fakeStore) ListOpenReceipts(_ context.Context, limit int) ([]model.Receipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -56,6 +56,14 @@ func (b *base) SetReceiptResult(ctx context.Context, provider, extID, state, uui
 	return err
 }
 
+func (b *base) MarkReceiptSending(ctx context.Context, provider, extID, note string) error {
+	_, err := b.db.ExecContext(ctx,
+		"UPDATE receipts SET state = "+b.ph(1)+", last_error = "+b.ph(2)+", updated_at = "+b.ph(3)+
+			" WHERE provider = "+b.ph(4)+" AND ext_id = "+b.ph(5),
+		model.ReceiptUnknown, note, nowStr(), provider, extID)
+	return err
+}
+
 func (b *base) ListOpenReceipts(ctx context.Context, limit int) ([]model.Receipt, error) {
 	// #nosec G202 -- колонки из константы receiptCols, значения передаются биндовыми параметрами
 	rows, err := b.db.QueryContext(ctx,

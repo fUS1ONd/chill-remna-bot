@@ -156,6 +156,8 @@ func TestReceipt_YooKassaPaymentsGetReceipt(t *testing.T) {
 
 // Право на чек столбится строкой в базе ДО обращения к ФНС: иначе потерянный
 // ответ и повторная финализация не оставили бы следа, по которому искать чек.
+// На время обращения строка — unknown: процесс, упавший после приёма дохода
+// ФНС, не должен оставить pending, который пробился бы вторым чеком.
 func TestReceipt_ClaimedBeforeFNS(t *testing.T) {
 	a, _, fs, fns := receiptApp(t)
 	ctx := context.Background()
@@ -167,8 +169,37 @@ func TestReceipt_ClaimedBeforeFNS(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.moneyWG.Wait()
-	if seen == nil || seen.State != model.ReceiptPending {
-		t.Fatalf("в момент обращения к ФНС строка чека должна уже лежать в pending, got %+v", seen)
+	if seen == nil || seen.State != model.ReceiptUnknown {
+		t.Fatalf("в момент обращения к ФНС строка чека должна уже лежать в unknown, got %+v", seen)
+	}
+}
+
+// Процесс упал, пока ФНС принимала доход: исход не записан. Плановый проход
+// второй чек не пробивает, а сверяет по метке и находит первый.
+func TestReceiptPass_CrashDuringCreateNoSecondReceipt(t *testing.T) {
+	a, _, fs, fns := receiptApp(t)
+	ctx := context.Background()
+	claimRow(t, fs, "yk-crash", "ccc333")
+	// Падение: ФНС приняла доход, а запись исхода не случилась — строка
+	// остаётся такой, какой была в момент обращения.
+	var inFlight model.Receipt
+	fns.before = func(moynalog.Income) {
+		r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-crash")
+		inFlight = *r
+	}
+	a.receiptPassOnce(ctx)
+	fs.mu.Lock()
+	*fs.receipts[model.PayMethodYooKassa+"/yk-crash"] = inFlight
+	fs.receipts[model.PayMethodYooKassa+"/yk-crash"].UpdatedAt = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	fs.mu.Unlock()
+	fns.before = nil
+
+	a.receiptPassOnce(ctx)
+	if n := len(fns.calls()); n != 1 {
+		t.Fatalf("после падения в ФНС ушло %d чеков", n)
+	}
+	if r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-crash"); r.State != model.ReceiptCreated || r.UUID != "uuid-1" {
+		t.Fatalf("сверка не нашла первый чек: %+v", r)
 	}
 }
 

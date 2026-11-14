@@ -72,6 +72,23 @@ func TestReceiptClaimUnique(t *testing.T) {
 	})
 }
 
+// Перед обращением к ФНС чек уходит в unknown, попытка при этом не считается.
+func TestReceiptMarkSending(t *testing.T) {
+	eachStore(t, func(t *testing.T, st Storage) {
+		ctx := context.Background()
+		if _, err := st.ClaimReceipt(ctx, sampleReceipt(model.PayMethodYooKassa, "pay-s")); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.MarkReceiptSending(ctx, model.PayMethodYooKassa, "pay-s", "в полёте"); err != nil {
+			t.Fatal(err)
+		}
+		r, _ := st.GetReceipt(ctx, model.PayMethodYooKassa, "pay-s")
+		if r == nil || r.State != model.ReceiptUnknown || r.Attempts != 0 || r.LastError != "в полёте" || r.UpdatedAt == "" {
+			t.Fatalf("после отметки: %+v", r)
+		}
+	})
+}
+
 // Исход каждого обращения к ФНС записывается: состояние, uuid, ошибка, счётчик.
 func TestReceiptResult(t *testing.T) {
 	eachStore(t, func(t *testing.T, st Storage) {
