@@ -183,7 +183,9 @@ func (a *App) CabinetEmailRegister(ctx context.Context, email, password, start s
 		// Ждущий одобрения аккаунт, пришедший по ссылке с Приглашением,
 		// получает Доступ, как /start inv_ в чате; у кого Доступ уже есть, код
 		// не тратится.
-		a.cabinetEmailInvite(ctx, u.TgID, start)
+		if code, ok := inviteParam(start); ok {
+			a.redeemInvite(ctx, u.TgID, code, "", "")
+		}
 		if err := a.CabinetGate(ctx, u.TgID, true); err != nil {
 			return 0, err
 		}
@@ -207,8 +209,11 @@ func (a *App) CabinetEmailRegister(ctx context.Context, email, password, start s
 	// заведения строки пользователя: привязка действует только для новичка.
 	// Адрес заводится бесплатно: бонусы такому приглашённому — только после
 	// его оплаты (grantReferralBonus). Приглашение привязывает Автора само,
-	// тоже до строки пользователя.
-	if !a.cabinetEmailInvite(ctx, tgID, start) {
+	// тоже до строки пользователя. Недействительный код ничего не даёт:
+	// аккаунт остаётся в очереди на одобрение, как без кода.
+	if code, ok := inviteParam(start); ok {
+		a.redeemInvite(ctx, tgID, code, "", "")
+	} else {
 		a.bindReferrer(ctx, tgID, start, true)
 	}
 	_ = a.store.UpsertUser(ctx, tgID)
@@ -230,18 +235,6 @@ func (a *App) CabinetEmailRegister(ctx context.Context, email, password, start s
 		return 0, err
 	}
 	return tgID, nil
-}
-
-// cabinetEmailInvite активирует Приглашение inv_<код> из ссылки на кабинет для
-// аккаунта по почте и сообщает, был ли в параметре код. Недействительный код
-// ничего не даёт: аккаунт остаётся в очереди на одобрение, как без кода.
-func (a *App) cabinetEmailInvite(ctx context.Context, tgID int64, start string) bool {
-	code, ok := strings.CutPrefix(strings.TrimSpace(start), "inv_")
-	if !ok || code == "" {
-		return false
-	}
-	a.redeemInvite(ctx, tgID, code, "", "")
-	return true
 }
 
 // CabinetEmailLogin verifies email+password and returns the account identity.

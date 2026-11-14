@@ -76,7 +76,7 @@ func (a *App) CabinetBindTelegram(ctx context.Context, tgID, newTgID int64) (int
 	// пускает, заперла бы человека снаружи вместе с его оплаченной подпиской.
 	// Доступ почтового аккаунта (Приглашение, одобрение владельца) переезжает
 	// вместе с ним, и такому аккаунту Доступ Telegram не нужен.
-	hadAccess := a.accessMode() != model.AccessPublic && !a.MiniAccessDenied(ctx, tgID)
+	hadAccess := a.accessMode() != model.AccessPublic && a.accessGranted(ctx, tgID)
 	if !hadAccess && a.MiniAccessDenied(ctx, newTgID) {
 		return 0, errBindDenied
 	}
@@ -159,9 +159,9 @@ func (a *App) CabinetBindTelegram(ctx context.Context, tgID, newTgID int64) (int
 		}
 	}
 
-	// Доступ почтового аккаунта на телеграмном идентификаторе — флаг
-	// белого списка: одобрение модерации кабинета Telegram-аккаунту Доступа
-	// не даёт.
+	// На телеграмном идентификаторе Доступ держит только флаг Whitelisted:
+	// одобрение модерации кабинета (WebApproved) Telegram-аккаунту Доступа
+	// не даёт, поэтому одобренному по почте флаг ставится явно.
 	if hadAccess && !a.accessGranted(ctx, newTgID) {
 		if err := a.store.SetWhitelisted(ctx, newTgID, true); err != nil {
 			a.log.Warn("привязка Telegram: Доступ не сохранён", "err", err)

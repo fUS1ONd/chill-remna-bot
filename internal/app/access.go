@@ -146,8 +146,8 @@ func (a *App) MiniAccessDenied(ctx context.Context, tgID int64) bool {
 	if a.store == nil {
 		return false
 	}
-	// E-mail-аккаунтов без Доступа CabinetGate отправит в обычную очередь на
-	// одобрение.
+	// Аккаунт кабинета по почте без Доступа здесь получает отказ, а не
+	// очередь: в очередь на одобрение его ставит CabinetGate на входе.
 	return !a.accessGranted(ctx, tgID)
 }
 
@@ -259,6 +259,13 @@ func (a *App) redeemInvite(ctx context.Context, chatID int64, code, username, fi
 		a.notify(ctx, a.cfg.AdminID, i18n.T(alang, "inv.used_admin", code, a.userLabelByID(ctx, chatID)))
 	}
 	return i18n.T(lang, "inv.ok"), true
+}
+
+// inviteParam — код Приглашения из параметра ссылки inv_<код> (/start в чате,
+// старт мини-аппа, ссылка на кабинет).
+func inviteParam(param string) (string, bool) {
+	code, ok := strings.CutPrefix(strings.TrimSpace(param), "inv_")
+	return code, ok && code != ""
 }
 
 // markOpenInvite — открытый бот: приглашение ничего не выдаёт, только

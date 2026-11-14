@@ -901,7 +901,7 @@ func (a *App) handleMessage(ctx context.Context, m *models.Message) {
 	// Ссылка-приглашение обрабатывается ДО проверки режима публичности: иначе
 	// приглашённый упрётся в «нужно приглашение» и ссылка никогда не сработает.
 	if !isAdmin && strings.HasPrefix(text, "/start ") {
-		if code, isInv := strings.CutPrefix(strings.TrimSpace(strings.TrimPrefix(text, "/start ")), "inv_"); isInv && code != "" {
+		if code, isInv := inviteParam(strings.TrimPrefix(text, "/start ")); isInv {
 			if msg, ok := a.redeemInvite(ctx, chatID, code, username, firstName); msg != "" {
 				a.msg.Delete(ctx, chatID, m.ID)
 				a.send(ctx, chatID, msg)
