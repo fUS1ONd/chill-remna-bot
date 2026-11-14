@@ -38,7 +38,7 @@ func (a *App) showOwnerUserInvites(ctx context.Context, chatID int64, page int) 
 	now := time.Now().UTC()
 	var list []model.Invite
 	for _, inv := range all {
-		if inv.CreatedBy != 0 && inv.Active(now) {
+		if inv.FromUser() && inv.Active(now) {
 			list = append(list, inv)
 		}
 	}

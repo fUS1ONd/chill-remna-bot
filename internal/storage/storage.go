@@ -2824,7 +2824,7 @@ func (b *base) UserInviteStats(ctx context.Context) (model.UserInviteStats, erro
 		"SELECT COUNT(1) FROM invites WHERE created_by <> 0").Scan(&s.Created); err != nil {
 		return s, err
 	}
-	uses := "FROM invite_uses iu JOIN invites i ON i.code = iu.code WHERE i.created_by <> 0"
+	const uses = "FROM invite_uses iu JOIN invites i ON i.code = iu.code WHERE i.created_by <> 0"
 	if err := b.db.QueryRowContext(ctx, "SELECT COUNT(1) "+uses).Scan(&s.Activated); err != nil {
 		return s, err
 	}

@@ -462,7 +462,7 @@ func (a *App) showInvite(ctx context.Context, chatID int64, code string) {
 	text := i18n.T(lang, "inv.card", state, link, uses, exp)
 	// Приглашение пользователя: вместо подсказки владельцу — Автор; удалить
 	// нельзя (пропали бы записи, кто по нему пришёл, и счётчики), только отозвать.
-	userInv := inv.CreatedBy != 0
+	userInv := inv.FromUser()
 	back := "acc:list"
 	if userInv {
 		text += "\n" + i18n.T(lang, "inv.card_author", a.userLabelByID(ctx, inv.CreatedBy))
@@ -597,9 +597,10 @@ func (a *App) onAccess(ctx context.Context, chatID int64, val string) {
 		a.showOwnerUserInvites(ctx, chatID, p)
 	case "revoke":
 		if a.store != nil && arg != "" {
-			_ = a.store.RevokeInvite(ctx, arg)
 			// Отзыв Приглашения пользователя возвращает в их список.
-			if inv, err := a.store.GetInvite(ctx, arg); err == nil && inv != nil && inv.CreatedBy != 0 {
+			inv, _ := a.store.GetInvite(ctx, arg)
+			_ = a.store.RevokeInvite(ctx, arg)
+			if inv != nil && inv.FromUser() {
 				a.showOwnerUserInvites(ctx, chatID, 0)
 				return
 			}

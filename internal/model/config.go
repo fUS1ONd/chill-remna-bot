@@ -82,6 +82,9 @@ type Invite struct {
 	Grant string
 }
 
+// FromUser — Автор приглашения пользователь, а не владелец.
+func (i *Invite) FromUser() bool { return i.CreatedBy != 0 }
+
 // InviteGrantAccess — приглашение выдаёт только Доступ.
 const InviteGrantAccess = "access"
 
