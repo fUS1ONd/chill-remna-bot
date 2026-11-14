@@ -53,6 +53,10 @@ func (a *App) mnClientGet() (moyNalogAPI, model.MoyNalogConfig) {
 // receiptTimeout — потолок одного обращения к ФНС вместе со входом в кабинет.
 const receiptTimeout = time.Minute
 
+// receiptSaveTimeout — потолок записи по чеку в базу и алерта на контексте,
+// отвязанном от запроса: исход не должен теряться из-за истёкшего вебхука.
+const receiptSaveTimeout = 15 * time.Second
+
 // issueReceipt заводит чек «Мой налог» по оплате и пробивает его в фоне.
 //
 // Чек положен только деньгам, пришедшим через ЮKassa: оплата с баланса учтена
@@ -94,7 +98,7 @@ func (a *App) issueReceipt(ctx context.Context, provider, extID string, kopecks 
 	// Столбление и алерт — своим контекстом: контекст запроса (вебхук живёт
 	// 15 с) мог истечь за время финализации, и тогда чек пропал бы молча — ни
 	// строки, ни алерта.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), receiptSaveTimeout)
 	defer cancel()
 	claimed, err := a.store.ClaimReceipt(ctx, r)
 	if err != nil {
@@ -176,7 +180,7 @@ func (a *App) createIncome(ctx context.Context, client moyNalogAPI, r *model.Rec
 
 	// Запись исхода — своим контекстом: контекст обращения к ФНС мог истечь,
 	// а без записи пробитый чек остался бы pending и ушёл бы в ФНС ещё раз.
-	saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), receiptSaveTimeout)
 	defer saveCancel()
 	// На время обращения чек — unknown: если процесс упадёт после приёма
 	// дохода ФНС, следующий проход сверит его по метке, а не пробьёт второй.
@@ -233,7 +237,7 @@ const reconcileWindow = 24 * time.Hour
 // приняла, пробиваем заново. Список неполный или сверка не удалась — чек
 // остаётся unknown до следующего прохода: пробить вслепую — рискнуть дублем.
 func (a *App) reconcileReceipt(ctx context.Context, client moyNalogAPI, r *model.Receipt) {
-	saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), receiptSaveTimeout)
 	defer saveCancel()
 	keepUnknown := func(reason string) {
 		if err := a.store.SetReceiptResult(saveCtx, r.Provider, r.ExtID, model.ReceiptUnknown, "", reason); err != nil {

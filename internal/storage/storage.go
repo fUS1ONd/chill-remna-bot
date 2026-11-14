@@ -209,7 +209,7 @@ type Storage interface {
 	// MarkReceiptSending переводит чек в unknown перед обращением к ФНС, не
 	// считая попытку: процесс, упавший после приёма дохода, оставит чек на
 	// сверку по метке, а не на второе пробитие.
-	MarkReceiptSending(ctx context.Context, provider, extID, note string) error
+	MarkReceiptSending(ctx context.Context, provider, extID, reason string) error
 	// ListOpenReceipts — чеки, по которым есть работа планового прохода:
 	// pending и unknown, а также rejected без алерта. Первыми — давно не
 	// тронутые: застрявшие чеки не забивают собой каждый проход.

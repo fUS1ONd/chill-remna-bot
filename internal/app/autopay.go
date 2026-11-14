@@ -231,6 +231,7 @@ func (a *App) showAutoPay(ctx context.Context, chatID int64) {
 		rows := [][]models.InlineKeyboardButton{}
 		switch {
 		case perpetual:
+			// Бессрочному включать и покупать нечего — только отвязка ниже.
 		case ap != nil && ap.MethodID != "":
 			// Способ оплаты уже сохранён — включаем обратно одной кнопкой.
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "ap.btn_on"), "ap:on")})
