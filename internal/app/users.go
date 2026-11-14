@@ -513,7 +513,9 @@ func (a *App) showUser(ctx context.Context, chatID, uid int64) {
 		// оттуда: иначе найденный человек стоил бы нового поиска.
 		[]models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), backToUserList(a.getUI(chatID))), btn(i18n.T(lang, "btn.home"), "menu:home")},
 	)
-	a.sendUsrKB(ctx, chatID, i18n.T(lang, "user.card", a.userLabelFor(ctx, u), created, p2p, status, subBlock)+invLine+torLine, rows)
+	// Пригласивший и Приглашения — сведения о человеке: под подпиской, выше
+	// служебной подсказки про «Удалить», которой заканчивается user.card.
+	a.sendUsrKB(ctx, chatID, i18n.T(lang, "user.card", a.userLabelFor(ctx, u), created, p2p, status, subBlock+invLine)+torLine, rows)
 }
 
 // clientPlanTitle — тариф текущей подписки для экранов клиента (чат,

@@ -165,6 +165,10 @@ func TestOwnerUserInvites_UserCard(t *testing.T) {
 	if !strings.Contains(fm.last(), "Пригласивший: Автор") {
 		t.Fatalf("в карточке друга нет Пригласившего: %s", fm.last())
 	}
+	// Сведения о человеке — выше служебной подсказки про «Удалить» (QA B5).
+	if strings.Index(fm.last(), "Пригласивший") > strings.Index(fm.last(), "🗑 «Удалить»") {
+		t.Fatalf("Пригласивший ниже подсказки про «Удалить»: %s", fm.last())
+	}
 	if !hasCB(lastKBData(fm), "usr:view:"+author) {
 		t.Fatalf("нет перехода к Пригласившему: %v", lastKBData(fm))
 	}
