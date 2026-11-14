@@ -71,7 +71,8 @@ type MiniProvider interface {
 	// аккаунт панели новичку — как /start в чате. Возвращает текст для
 	// человека (пусто — сказать нечего).
 	// cabinet — вход через кабинет (там новичков может одобрять админ).
-	MiniStart(ctx context.Context, tgID int64, param string, cabinet bool) string
+	// username и firstName — из подписи Telegram.
+	MiniStart(ctx context.Context, tgID int64, param, username, firstName string, cabinet bool) string
 	// WebUI — выбранный дизайн и брендирование страниц.
 	WebUI() WebUIDTO
 	// BrandLogo — логотип, загруженный в бота (dark — для тёмной темы).
@@ -617,7 +618,8 @@ func (s *Server) handleMiniAuth(w http.ResponseWriter, r *http.Request) {
 	notice := ""
 	if p := initDataStartParam(req.InitData); p != "" {
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		notice = s.mini.MiniStart(ctx, tgID, p, false)
+		username, first := initDataUserName(req.InitData)
+		notice = s.mini.MiniStart(ctx, tgID, p, username, first, false)
 		cancel()
 	}
 	tok := issueJWT(tgID, false, jwtKey(s.mini.MiniBotToken()), jwtTTL, s.mini.SessionVersion(), s.mini.SessionEpoch(r.Context(), tgID))

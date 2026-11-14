@@ -33,14 +33,18 @@ const (
 //
 // cabinet — вход через кабинет: если там новичков одобряет админ, до
 // одобрения ни реферал, ни поиск в панели не делаются.
-func (a *App) MiniStart(ctx context.Context, tgID int64, param string, cabinet bool) string {
+//
+// username и firstName — из подписи Telegram (initData, виджет входа):
+// Приглашение заводит строку пользователя и шлёт уведомления с именем, как
+// /start в чате.
+func (a *App) MiniStart(ctx context.Context, tgID int64, param, username, firstName string, cabinet bool) string {
 	if a.store == nil || tgID <= 0 {
 		return ""
 	}
 	param = strings.TrimSpace(param)
 	notice := ""
 	if code, ok := inviteParam(param); ok {
-		if msg, _ := a.redeemInvite(ctx, tgID, code, "", ""); msg != "" {
+		if msg, _ := a.redeemInvite(ctx, tgID, code, username, firstName); msg != "" {
 			notice = stripHTMLTags(msg)
 		}
 	}

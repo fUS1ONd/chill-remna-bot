@@ -157,7 +157,7 @@ func TestMiniStart_UserInvite(t *testing.T) {
 	_ = fs.SetUserInfo(ctx, uinvAuthor, "", "Автор")
 	userInvite(t, fs, "c1", uinvAuthor)
 
-	if a.MiniStart(ctx, uinvFriend, "inv_c1", false) == "" {
+	if a.MiniStart(ctx, uinvFriend, "inv_c1", "", "", false) == "" {
 		t.Fatal("нет текста об активации")
 	}
 	u, _ := fs.GetUser(ctx, uinvFriend)
@@ -177,10 +177,27 @@ func TestMiniStart_UserInvite(t *testing.T) {
 	const stranger = int64(1000000701)
 	userInvite(t, fs, "c2", uinvAuthor)
 	a.botCfg.UserInvites = false
-	if got := a.MiniStart(ctx, stranger, "inv_c2", false); got != "⛔️ Приглашение недействительно — попросите у друга новое." {
+	if got := a.MiniStart(ctx, stranger, "inv_c2", "", "", false); got != "⛔️ Приглашение недействительно — попросите у друга новое." {
 		t.Fatalf("приостановленное: %q", got)
 	}
 	if !a.MiniAccessDenied(ctx, stranger) || inviteUsed(t, fs, "c2") != 0 {
 		t.Fatal("приостановленное приглашение пустило или потратилось")
+	}
+}
+
+// Вошедший по Приглашению через мини-апп или кабинет приходит с именем из
+// подписи Telegram: Автор видит его имя, а не «друг», и строка в базе его
+// хранит (QA B1).
+func TestMiniStart_InviteKeepsName(t *testing.T) {
+	a, fm, fs := uinvApp(t)
+	ctx := context.Background()
+	userInvite(t, fs, "c1", uinvAuthor)
+
+	a.MiniStart(ctx, uinvFriend, "inv_c1", "friend_u", "Друг", false)
+	if !strings.Contains(fm.joined(), "По вашему приглашению пришёл Друг") {
+		t.Fatalf("Автору без имени: %s", fm.joined())
+	}
+	if u, _ := fs.GetUser(ctx, uinvFriend); u == nil || u.FirstName != "Друг" || u.Username != "friend_u" {
+		t.Fatalf("имя не сохранено: %+v", u)
 	}
 }

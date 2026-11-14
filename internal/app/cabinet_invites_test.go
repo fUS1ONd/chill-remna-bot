@@ -114,7 +114,7 @@ func TestCabinetTelegramInvite(t *testing.T) {
 	a, _, fs := cabInvApp(t)
 	ctx := context.Background()
 	userInvite(t, fs, "c1", uinvAuthor)
-	a.MiniStart(ctx, uinvFriend, "inv_c1", true)
+	a.MiniStart(ctx, uinvFriend, "inv_c1", "", "", true)
 	a.CabinetEnsureUser(ctx, uinvFriend)
 	u, _ := fs.GetUser(ctx, uinvFriend)
 	if u == nil || !u.Whitelisted || u.ReferredBy != uinvAuthor {
@@ -155,7 +155,7 @@ func TestCabinetInvite_BindKeepsAccess(t *testing.T) {
 	}
 	// Друг по такому приглашению проходит: Автор не «пропал».
 	const friend = int64(1000000802)
-	a.MiniStart(ctx, friend, "inv_"+list[0].Code, false)
+	a.MiniStart(ctx, friend, "inv_"+list[0].Code, "", "", false)
 	if f, _ := fs.GetUser(ctx, friend); f == nil || !f.Whitelisted || f.ReferredBy != tg {
 		t.Fatalf("приглашение после переезда: %+v", f)
 	}

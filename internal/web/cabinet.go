@@ -206,7 +206,7 @@ func (s *Server) handleCabinetTelegramAuth(w http.ResponseWriter, r *http.Reques
 	// До заведения пользователя: привязка к пригласившему действует только
 	// для новичка.
 	if st := strings.TrimSpace(req.Start); st != "" && len(st) <= 64 {
-		s.mini.MiniStart(ctx, tgID, st, true)
+		s.mini.MiniStart(ctx, tgID, st, u.Username, u.FirstName, true)
 	}
 	s.mini.CabinetEnsureUser(ctx, tgID)
 	// Закрытый вход отказывает тем же признаком, что и ручки мини-аппа:

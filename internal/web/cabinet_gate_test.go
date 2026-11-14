@@ -32,6 +32,8 @@ type fakeMini struct {
 	invites []string
 	// tgStart — параметр входа, дошедший до MiniStart.
 	tgStart string
+	// tgName — @username и имя, дошедшие до MiniStart («username|имя»).
+	tgName string
 }
 
 const fakeBotToken = "123456:TESTTOKEN"

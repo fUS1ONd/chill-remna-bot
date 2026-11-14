@@ -83,7 +83,7 @@ func TestInviteUses_OpenModeMarksNewcomers(t *testing.T) {
 	a.handleMessage(ctx, msgText(1000000003, "/start inv_opencode"))
 	a.handleMessage(ctx, msgText(1000000004, "/start inv_opencode"))
 	a.handleMessage(ctx, msgText(1000000003, "/start inv_opencode"))
-	a.MiniStart(ctx, 1000000005, "inv_opencode", false)
+	a.MiniStart(ctx, 1000000005, "inv_opencode", "", "", false)
 	a.handleMessage(ctx, msgText(1000000006, "/start inv_revcode"))
 
 	got := inviteUsers(t, fs, "opencode")

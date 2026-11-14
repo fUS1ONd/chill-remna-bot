@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -56,8 +57,9 @@ func containsKey(b []byte, key string) bool {
 }
 
 // MiniStart запоминает параметр входа; Приглашение «выдаёт» Доступ.
-func (f *fakeMini) MiniStart(_ context.Context, _ int64, param string, _ bool) string {
+func (f *fakeMini) MiniStart(_ context.Context, _ int64, param, username, firstName string, _ bool) string {
 	f.tgStart = param
+	f.tgName = username + "|" + firstName
 	if strings.HasPrefix(param, "inv_") {
 		f.denied = false
 	}
@@ -140,11 +142,32 @@ func TestCabinetTelegramLoginInvite(t *testing.T) {
 	f := &fakeMini{denied: true}
 	h := gateServer(t, f)
 	now := time.Now().Unix()
-	fields := map[string]string{"id": "900", "auth_date": strconv.FormatInt(now, 10)}
-	body, _ := json.Marshal(map[string]any{"id": 900, "auth_date": now, "hash": signLogin(fields, fakeBotToken), "start": "inv_c1"})
+	fields := map[string]string{"id": "900", "auth_date": strconv.FormatInt(now, 10), "username": "friend_u", "first_name": "Друг"}
+	body, _ := json.Marshal(map[string]any{"id": 900, "auth_date": now, "username": "friend_u", "first_name": "Друг",
+		"hash": signLogin(fields, fakeBotToken), "start": "inv_c1"})
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, gateReq(http.MethodPost, "/api/cabinet/auth/telegram", string(body), "", "203.0.113.71"))
 	if w.Code != http.StatusOK || !containsKey(w.Body.Bytes(), "token") || f.tgStart != "inv_c1" {
 		t.Fatalf("вход с приглашением: %d %s start=%q", w.Code, w.Body.String(), f.tgStart)
+	}
+	// Имя из подписи виджета доходит до Приглашения (QA B1).
+	if f.tgName != "friend_u|Друг" {
+		t.Fatalf("имя до MiniStart: %q", f.tgName)
+	}
+}
+
+// Старт мини-аппа с inv_: имя из initData доходит до Приглашения (QA B1).
+func TestMiniAuthInviteName(t *testing.T) {
+	f := &fakeMini{}
+	h := gateServer(t, f)
+	v := url.Values{}
+	v.Set("auth_date", strconv.FormatInt(time.Now().Unix(), 10))
+	v.Set("user", `{"id":901,"first_name":"Друг","username":"friend_u"}`)
+	v.Set("start_param", "inv_c1")
+	body, _ := json.Marshal(map[string]string{"init_data": signInitData(v, fakeBotToken)})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, gateReq(http.MethodPost, "/api/miniapp/auth", string(body), "", "203.0.113.72"))
+	if w.Code != http.StatusOK || f.tgStart != "inv_c1" || f.tgName != "friend_u|Друг" {
+		t.Fatalf("вход мини-аппа: %d %s start=%q name=%q", w.Code, w.Body.String(), f.tgStart, f.tgName)
 	}
 }

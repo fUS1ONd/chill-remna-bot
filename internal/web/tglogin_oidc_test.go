@@ -35,8 +35,8 @@ type oidcMini struct {
 
 func (m *oidcMini) CabinetTGLoginNew() bool { return m.newLogin }
 
-func (m *oidcMini) MiniStart(context.Context, int64, string, bool) string { return "" }
-func (m *oidcMini) CabinetEnsureUser(_ context.Context, id int64)         { m.ensured = id }
+func (m *oidcMini) MiniStart(context.Context, int64, string, string, string, bool) string { return "" }
+func (m *oidcMini) CabinetEnsureUser(_ context.Context, id int64)                         { m.ensured = id }
 func (m *oidcMini) CabinetBindName(_ context.Context, _ int64, username, first string) {
 	m.name = username + "|" + first
 }
