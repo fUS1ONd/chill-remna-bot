@@ -141,7 +141,7 @@ func TestUserInvites_CreateShareRevoke(t *testing.T) {
 	}
 	inv := list[0]
 	exp, _ := time.Parse(time.RFC3339, inv.ExpiresAt)
-	if inv.MaxUses != 1 || exp.Sub(time.Now()) < 29*24*time.Hour || exp.Sub(time.Now()) > 30*24*time.Hour+time.Minute {
+	if inv.MaxUses != 1 || time.Until(exp) < 29*24*time.Hour || time.Until(exp) > 30*24*time.Hour+time.Minute {
 		t.Fatalf("параметры приглашения: %+v", inv)
 	}
 	screen := fm.last()
