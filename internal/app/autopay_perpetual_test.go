@@ -84,6 +84,9 @@ func TestAutoPay_PerpetualCanTurnOff(t *testing.T) {
 	}
 
 	a.onAutoPayUser(ctx, uid, "off")
+	if hasCallback(fm, "ap:on") {
+		t.Fatalf("после выключения бессрочному предложено включить снова: %+v", fm.lastKB)
+	}
 	a.onAutoPayUser(ctx, uid, "show")
 	if hasCallback(fm, "ap:on") || hasCallback(fm, "menu:buy") {
 		t.Fatalf("бессрочному включать автопродление и покупать нечего: %+v", fm.lastKB)

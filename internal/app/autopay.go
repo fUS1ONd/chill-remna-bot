@@ -282,10 +282,8 @@ func (a *App) onAutoPayUser(ctx context.Context, chatID int64, val string) {
 		}
 		a.payLog(ctx, model.PayMethodYooKassa, "", chatID, "autopay_off", "выключено пользователем")
 		a.sendKBSection(ctx, chatID, assets.SectionMySubscription, i18n.T(lang, "ap.turned_off"),
-			[][]models.InlineKeyboardButton{
-				{btn(i18n.T(lang, "ap.btn_on"), "ap:on")},
-				{btn(i18n.T(lang, "btn.back"), "menu:mysubs"), btn(i18n.T(lang, "btn.home"), "menu:home")},
-			})
+			a.autoPayOffKB(ctx, chatID, lang,
+				[]models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), "menu:mysubs"), btn(i18n.T(lang, "btn.home"), "menu:home")}))
 	case "on":
 		ap := a.getAutoPay(ctx, chatID)
 		if ap == nil || ap.MethodID == "" || !a.autoPayAvailable() || a.subPerpetual(ctx, chatID) {
@@ -334,11 +332,17 @@ func (a *App) onAutoPayUser(ctx context.Context, chatID int64, val string) {
 			_ = a.store.SetAutoPayEnabled(ctx, chatID, false)
 		}
 		a.sendKBSection(ctx, chatID, assets.SectionMySubscription, i18n.T(lang, "ap.declined"),
-			[][]models.InlineKeyboardButton{
-				{btn(i18n.T(lang, "ap.btn_on"), "ap:on")},
-				{btn(i18n.T(lang, "btn.home"), "menu:home")},
-			})
+			a.autoPayOffKB(ctx, chatID, lang, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.home"), "menu:home")}))
 	}
+}
+
+// autoPayOffKB — клавиатура ответа на выключение: «Включить» и под ней nav.
+// Бессрочному «Включить» не показываем — продлевать нечего.
+func (a *App) autoPayOffKB(ctx context.Context, chatID int64, lang string, nav []models.InlineKeyboardButton) [][]models.InlineKeyboardButton {
+	if a.subPerpetual(ctx, chatID) {
+		return [][]models.InlineKeyboardButton{nav}
+	}
+	return [][]models.InlineKeyboardButton{{btn(i18n.T(lang, "ap.btn_on"), "ap:on")}, nav}
 }
 
 // unlinkAutoPay отвязывает карту: запись автопродления удаляется целиком.
