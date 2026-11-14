@@ -1403,9 +1403,8 @@ func (a *App) finalizePurchaseAt(ctx context.Context, telegramID int64, months i
 
 func (a *App) finalizePurchaseCore(ctx context.Context, telegramID int64, months int, method, amount, extID string, snap *model.PlanSnapshot, capturedAt time.Time) (string, string, *model.PlanSnapshot, error) {
 	// Serialize duplicate deliveries of the same payment and bail before we touch
-	// the panel if it's already been finalized (the panel extend happens below,
-	// before the AddPayment idempotency barrier, so without this two concurrent
-	// deliveries would each extend the subscription).
+	// the panel if it's already been finalized (without this two concurrent
+	// deliveries would both pass the check and race to the AddPayment barrier).
 	//
 	// Счёт до восстановления базы проверяется до замка: проверка ничего не
 	// выдаёт, а список админу уходит по сети — ей под шардовым замком не место.
@@ -1577,7 +1576,11 @@ func (a *App) dropUnservedPayment(ctx context.Context, method, extID string, tel
 	if a.store == nil || payID == 0 {
 		return
 	}
-	err := a.store.DeletePayment(ctx, payID)
+	// Частая причина отказа панели — истёкший или отменённый ctx вебхука; под
+	// ним и снятие упало бы, оставив платёж без подписки навсегда.
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	err := a.store.DeletePayment(dctx, payID)
 	if err == nil {
 		return
 	}
