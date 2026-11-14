@@ -649,6 +649,7 @@ func (b *base) DeletePaymentsByUser(ctx context.Context, telegramID int64) error
 }
 
 func (b *base) DeletePayment(ctx context.Context, id int64) error {
+	// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 	_, err := b.db.ExecContext(ctx, "DELETE FROM payments WHERE id = "+b.ph(1), id)
 	return err
 }
@@ -884,6 +885,7 @@ func (b *base) AddPayment(ctx context.Context, p *model.Payment) error {
 	}
 	// Столкновение id — не дубль сделки, а невезение с часами: пробуем новый.
 	for attempt := 0; ; attempt++ {
+		// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 		_, err := b.db.ExecContext(ctx,
 			"INSERT INTO payments (id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot, captured_at) "+
 				"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+", "+b.ph(10)+", "+b.ph(11)+")",
@@ -962,6 +964,7 @@ func (b *base) AddPaymentAndBalance(ctx context.Context, p *model.Payment, kopec
 	// способ не потерять откат ни на одной из веток выхода.
 	defer func() { _ = tx.Rollback() }()
 
+	// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO payments (id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot, captured_at) "+
 			"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+", "+b.ph(10)+", "+b.ph(11)+")",

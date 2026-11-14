@@ -235,6 +235,7 @@ func (b *base) MoveAccount(ctx context.Context, from, to int64) error {
 	}
 	// Отметки «пришёл по ссылке» целевого номера (открытый бот) тоже ничего не
 	// хранят, а первичный ключ (код, номер) с переезжающей активацией делят.
+	// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM invite_uses WHERE telegram_id = "+b.ph(1), to); err != nil {
 		return err

@@ -884,6 +884,7 @@ func (b *base) restoreBackup(ctx context.Context, open func() (io.Reader, error)
 	// восстановленный pending пробился бы вторым чеком. Уводим в unknown —
 	// сверка по метке найдёт пробитый или пробьёт заново. При переносе базы
 	// это стоит лишь одной сверки.
+	// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 	if _, err := tx.ExecContext(ctx,
 		"UPDATE receipts SET state = "+b.ph(1)+", last_error = "+b.ph(2)+" WHERE state = "+b.ph(3),
 		model.ReceiptUnknown, "восстановлен из бэкапа до пробития — сверка по метке", model.ReceiptPending); err != nil {

@@ -19,6 +19,7 @@ func (b *base) ClaimReceipt(ctx context.Context, r *model.Receipt) (bool, error)
 	}
 	// ON CONFLICT DO NOTHING одинаково понимают SQLite и Postgres: проигравший
 	// гонку получает не ошибку, а ноль вставленных строк.
+	// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 	res, err := b.db.ExecContext(ctx,
 		"INSERT INTO receipts (provider, ext_id, amount_kopecks, name, marker, income_at, state, created_at) "+
 			"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+") "+
@@ -48,6 +49,7 @@ func (b *base) GetReceipt(ctx context.Context, provider, extID string) (*model.R
 }
 
 func (b *base) SetReceiptResult(ctx context.Context, provider, extID, state, uuid, lastError string) error {
+	// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 	_, err := b.db.ExecContext(ctx,
 		"UPDATE receipts SET state = "+b.ph(1)+", receipt_uuid = "+b.ph(2)+", last_error = "+b.ph(3)+
 			", attempts = attempts + 1, updated_at = "+b.ph(4)+
@@ -57,6 +59,7 @@ func (b *base) SetReceiptResult(ctx context.Context, provider, extID, state, uui
 }
 
 func (b *base) MarkReceiptSending(ctx context.Context, provider, extID, reason string) error {
+	// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 	_, err := b.db.ExecContext(ctx,
 		"UPDATE receipts SET state = "+b.ph(1)+", last_error = "+b.ph(2)+", updated_at = "+b.ph(3)+
 			" WHERE provider = "+b.ph(4)+" AND ext_id = "+b.ph(5),
@@ -89,6 +92,7 @@ func (b *base) ListOpenReceipts(ctx context.Context, limit int) ([]model.Receipt
 func (b *base) MarkReceiptAlerted(ctx context.Context, provider, extID string) (bool, error) {
 	// Условие alerted_at = '' — и есть «один алерт на чек»: второй путь,
 	// пришедший к тому же чеку, получит ноль обновлённых строк.
+	// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 	res, err := b.db.ExecContext(ctx,
 		"UPDATE receipts SET alerted_at = "+b.ph(1)+" WHERE provider = "+b.ph(2)+" AND ext_id = "+b.ph(3)+" AND alerted_at = ''",
 		nowStr(), provider, extID)
@@ -100,6 +104,7 @@ func (b *base) MarkReceiptAlerted(ctx context.Context, provider, extID string) (
 }
 
 func (b *base) UnmarkReceiptAlerted(ctx context.Context, provider, extID string) error {
+	// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 	_, err := b.db.ExecContext(ctx,
 		"UPDATE receipts SET alerted_at = '' WHERE provider = "+b.ph(1)+" AND ext_id = "+b.ph(2),
 		provider, extID)
