@@ -443,6 +443,10 @@ type fakeStore struct {
 	inviteUses []model.InviteUse
 	autopays   map[int64]*model.AutoPay
 	seq        int64
+	// receipts — чеки «Мой налог» по ключу «провайдер/id платежа».
+	receipts map[string]*model.Receipt
+	// addPaymentErr — пока задана, запись платежа падает не по дублю.
+	addPaymentErr error
 }
 
 func (s *fakeStore) WhitelistAllUsers(context.Context) (int64, error) {
@@ -515,6 +519,14 @@ func (s *fakeStore) CountWhitelisted(context.Context) (int, error) {
 }
 
 func (s *fakeStore) CreateInvite(_ context.Context, inv *model.Invite) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if inv.Grant == "" {
+		inv.Grant = model.InviteGrantAccess
+	}
+	if inv.CreatedAt == "" {
+		inv.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
 	if s.invites == nil {
 		s.invites = map[string]*model.Invite{}
 	}
@@ -524,6 +536,8 @@ func (s *fakeStore) CreateInvite(_ context.Context, inv *model.Invite) error {
 }
 
 func (s *fakeStore) GetInvite(_ context.Context, code string) (*model.Invite, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.invites == nil || s.invites[code] == nil {
 		return nil, nil
 	}
@@ -531,7 +545,33 @@ func (s *fakeStore) GetInvite(_ context.Context, code string) (*model.Invite, er
 	return &cp, nil
 }
 
+func (s *fakeStore) ListInvitesBy(_ context.Context, author int64) ([]model.Invite, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []model.Invite
+	for _, inv := range s.invites {
+		if inv.CreatedBy == author {
+			out = append(out, *inv)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
+	return out, nil
+}
+
+func (s *fakeStore) RevokeInviteBy(_ context.Context, code string, author int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	inv := s.invites[code]
+	if inv == nil || inv.CreatedBy != author || inv.Revoked || (inv.MaxUses > 0 && inv.Used >= inv.MaxUses) {
+		return false, nil
+	}
+	inv.Revoked = true
+	return true, nil
+}
+
 func (s *fakeStore) ListInvites(context.Context) ([]model.Invite, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var out []model.Invite
 	for _, inv := range s.invites {
 		out = append(out, *inv)
@@ -539,7 +579,34 @@ func (s *fakeStore) ListInvites(context.Context) ([]model.Invite, error) {
 	return out, nil
 }
 
+func (s *fakeStore) UserInviteStats(context.Context) (model.UserInviteStats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var st model.UserInviteStats
+	for _, inv := range s.invites {
+		if inv.CreatedBy != 0 {
+			st.Created++
+		}
+	}
+	paid := map[int64]bool{}
+	for _, u := range s.inviteUses {
+		if inv := s.invites[u.Code]; inv == nil || inv.CreatedBy == 0 {
+			continue
+		}
+		st.Activated++
+		for _, p := range s.pays {
+			if p.TelegramID == u.TelegramID && p.Status == model.PaymentPaid {
+				paid[u.TelegramID] = true
+			}
+		}
+	}
+	st.Paid = len(paid)
+	return st, nil
+}
+
 func (s *fakeStore) UseInvite(_ context.Context, code string, telegramID int64, open bool) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	inv := s.invites[code]
 	if inv == nil || inv.Revoked || (!open && !inv.Active(time.Now().UTC())) {
 		return false, nil
@@ -578,6 +645,8 @@ func (s *fakeStore) InviteUses(_ context.Context, code string, limit, offset int
 }
 
 func (s *fakeStore) RevokeInvite(_ context.Context, code string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if inv := s.invites[code]; inv != nil {
 		inv.Revoked = true
 	}
@@ -1008,6 +1077,8 @@ func (s *fakeStore) SetUserSnapshot(_ context.Context, id int64, snap *model.Pla
 }
 
 func (s *fakeStore) SetUserInfo(_ context.Context, id int64, username, firstName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.users == nil || s.users[id] == nil {
 		return nil
 	}
@@ -1056,6 +1127,9 @@ func (s *fakeStore) AddPayment(_ context.Context, p *model.Payment) error {
 	defer s.mu.Unlock()
 	if s.pays == nil {
 		s.pays = map[int64]*model.Payment{}
+	}
+	if s.addPaymentErr != nil {
+		return s.addPaymentErr
 	}
 
 	if p.ExtID != "" {
@@ -1125,6 +1199,98 @@ func (s *fakeStore) MostPopularPlan(_ context.Context) (int, int, error) {
 	}
 	return best, total, nil
 }
+func (s *fakeStore) ClaimReceipt(ctx context.Context, r *model.Receipt) (bool, error) {
+	// Как настоящая база: истёкший контекст запроса строку не вставляет.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.receipts == nil {
+		s.receipts = map[string]*model.Receipt{}
+	}
+	key := r.Provider + "/" + r.ExtID
+	if _, ok := s.receipts[key]; ok {
+		return false, nil
+	}
+	cp := *r
+	if cp.State == "" {
+		cp.State = model.ReceiptPending
+	}
+	cp.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	s.receipts[key] = &cp
+	return true, nil
+}
+
+func (s *fakeStore) GetReceipt(_ context.Context, provider, extID string) (*model.Receipt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.receipts[provider+"/"+extID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *r
+	return &cp, nil
+}
+
+func (s *fakeStore) SetReceiptResult(_ context.Context, provider, extID, state, uuid, lastError string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.receipts[provider+"/"+extID]; ok {
+		r.State, r.UUID, r.LastError = state, uuid, lastError
+		r.Attempts++
+		r.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	return nil
+}
+
+func (s *fakeStore) MarkReceiptSending(_ context.Context, provider, extID, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.receipts[provider+"/"+extID]; ok {
+		r.State, r.LastError = model.ReceiptUnknown, reason
+		r.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	return nil
+}
+
+func (s *fakeStore) ListOpenReceipts(_ context.Context, limit int) ([]model.Receipt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []model.Receipt
+	for _, r := range s.receipts {
+		if r.State == model.ReceiptPending || r.State == model.ReceiptUnknown ||
+			(r.State == model.ReceiptRejected && r.AlertedAt == "") {
+			out = append(out, *r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt < out[j].UpdatedAt })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (s *fakeStore) MarkReceiptAlerted(_ context.Context, provider, extID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.receipts[provider+"/"+extID]
+	if !ok || r.AlertedAt != "" {
+		return false, nil
+	}
+	r.AlertedAt = time.Now().UTC().Format(time.RFC3339)
+	return true, nil
+}
+
+func (s *fakeStore) UnmarkReceiptAlerted(_ context.Context, provider, extID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.receipts[provider+"/"+extID]; ok {
+		r.AlertedAt = ""
+	}
+	return nil
+}
+
 func (s *fakeStore) PaymentByExtID(_ context.Context, extID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1212,6 +1378,8 @@ func (s *fakeStore) SetUnreachable(_ context.Context, id int64, at string) error
 	return nil
 }
 func (s *fakeStore) SetBlocked(_ context.Context, id int64, blocked bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.users == nil {
 		s.users = map[int64]*model.User{}
 	}
@@ -1228,6 +1396,13 @@ func (s *fakeStore) DeleteUser(_ context.Context, id int64) error {
 			delete(s.webUsers, k)
 		}
 	}
+	return nil
+}
+
+func (s *fakeStore) DeletePayment(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pays, id)
 	return nil
 }
 
@@ -1323,6 +1498,8 @@ func (s *fakeStore) DeductBalance(_ context.Context, id int64, kopecks int64) (b
 	return true, nil
 }
 func (s *fakeStore) SetReferredBy(_ context.Context, id, ref int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.users == nil {
 		s.users = map[int64]*model.User{}
 	}
@@ -1547,6 +1724,22 @@ func (s *fakeStore) MoveAccount(_ context.Context, from, to int64) error {
 		ap.TelegramID = to
 		s.autopays[to] = ap
 	}
+	for _, inv := range s.invites {
+		if inv.CreatedBy == from {
+			inv.CreatedBy = to
+		}
+	}
+	kept := s.inviteUses[:0]
+	for _, u := range s.inviteUses {
+		switch u.TelegramID {
+		case to:
+			continue
+		case from:
+			u.TelegramID = to
+		}
+		kept = append(kept, u)
+	}
+	s.inviteUses = kept
 	return nil
 }
 
@@ -1880,6 +2073,8 @@ func (s *fakeStore) ReleasePromo(ctx context.Context, code string, id int64) err
 	return nil
 }
 func (s *fakeStore) SetWhitelisted(_ context.Context, id int64, on bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.users != nil && s.users[id] != nil {
 		s.users[id].Whitelisted = on
 	}
@@ -1897,6 +2092,8 @@ func (s *fakeStore) RemoveWhitelistID(_ context.Context, id int64) error {
 	return nil
 }
 func (s *fakeStore) IsWhitelistID(_ context.Context, id int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.wlIDs[id], nil
 }
 func (s *fakeStore) ListWhitelistIDs(_ context.Context) ([]int64, error) {
@@ -1932,6 +2129,23 @@ func (s *fakeStore) CountReferrals(_ context.Context, ref int64) (int, error) {
 		}
 	}
 	return n, nil
+}
+func (s *fakeStore) ListReferrals(_ context.Context, ref int64, limit, offset int) ([]int64, int, error) {
+	var all []int64
+	for id, u := range s.users {
+		if u.ReferredBy == ref {
+			all = append(all, id)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
+	if limit <= 0 || offset >= len(all) {
+		return nil, len(all), nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], len(all), nil
 }
 func (s *fakeStore) CreateP2PRequest(_ context.Context, r *model.P2PRequest) error {
 	s.mu.Lock()

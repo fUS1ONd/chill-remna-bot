@@ -54,9 +54,13 @@ type Storage interface {
 	CreateInvite(ctx context.Context, inv *model.Invite) error
 	GetInvite(ctx context.Context, code string) (*model.Invite, error)
 	ListInvites(ctx context.Context) ([]model.Invite, error)
+	ListInvitesBy(ctx context.Context, author int64) ([]model.Invite, error)
 	UseInvite(ctx context.Context, code string, telegramID int64, open bool) (bool, error)
 	InviteUses(ctx context.Context, code string, limit, offset int) ([]model.InviteUse, int, error)
 	RevokeInvite(ctx context.Context, code string) error
+	RevokeInviteBy(ctx context.Context, code string, author int64) (bool, error)
+	// UserInviteStats — счётчики Приглашений пользователей для владельца.
+	UserInviteStats(ctx context.Context) (model.UserInviteStats, error)
 	DeleteInvite(ctx context.Context, code string) error
 
 	SetAutoPay(ctx context.Context, ap *model.AutoPay) error
@@ -129,6 +133,9 @@ type Storage interface {
 	ReleasePromo(ctx context.Context, code string, telegramID int64) error
 
 	DeletePaymentsByUser(ctx context.Context, telegramID int64) error
+	// DeletePayment удаляет один платёж по id: снимает барьер идемпотентности,
+	// если подписка по записанному платежу так и не выдана.
+	DeletePayment(ctx context.Context, id int64) error
 	DeleteP2PRequestsByUser(ctx context.Context, telegramID int64) error
 
 	SetTermsAccepted(ctx context.Context, telegramID int64, ts string) error
@@ -155,6 +162,9 @@ type Storage interface {
 	SetRefBonusPaid(ctx context.Context, telegramID int64) error
 	AddRefEarned(ctx context.Context, telegramID int64, kopecks int64) error
 	CountReferrals(ctx context.Context, referrerID int64) (int, error)
+	// ListReferrals — Telegram ID приглашённых человеком (по Пригласившему),
+	// свежие первыми, и сколько их всего.
+	ListReferrals(ctx context.Context, referrerID int64, limit, offset int) ([]int64, int, error)
 
 	CreateP2PRequest(ctx context.Context, r *model.P2PRequest) error
 	GetP2PRequest(ctx context.Context, id int64) (*model.P2PRequest, error)
@@ -188,6 +198,28 @@ type Storage interface {
 
 	PaidPayments(ctx context.Context) ([]model.Payment, error)
 	PaymentByExtID(ctx context.Context, extID string) (bool, error)
+
+	// ClaimReceipt столбит право на чек вставкой строки до похода в ФНС.
+	// false — строка по этому платежу уже есть, чек ведёт кто-то другой.
+	ClaimReceipt(ctx context.Context, r *model.Receipt) (bool, error)
+	// GetReceipt — чек по платежу провайдера; nil, если его нет.
+	GetReceipt(ctx context.Context, provider, extID string) (*model.Receipt, error)
+	// SetReceiptResult записывает исход обращения к ФНС и считает попытку.
+	SetReceiptResult(ctx context.Context, provider, extID, state, uuid, lastError string) error
+	// MarkReceiptSending переводит чек в unknown перед обращением к ФНС, не
+	// считая попытку: процесс, упавший после приёма дохода, оставит чек на
+	// сверку по метке, а не на второе пробитие.
+	MarkReceiptSending(ctx context.Context, provider, extID, reason string) error
+	// ListOpenReceipts — чеки, по которым есть работа планового прохода:
+	// pending и unknown, а также rejected без алерта. Первыми — давно не
+	// тронутые: застрявшие чеки не забивают собой каждый проход.
+	ListOpenReceipts(ctx context.Context, limit int) ([]model.Receipt, error)
+	// MarkReceiptAlerted отмечает алерт владельцу по чеку. false — алерт по
+	// нему уже отмечен раньше.
+	MarkReceiptAlerted(ctx context.Context, provider, extID string) (bool, error)
+	// UnmarkReceiptAlerted снимает отметку алерта: Telegram сообщение не
+	// принял, и алерт повторит следующий проход.
+	UnmarkReceiptAlerted(ctx context.Context, provider, extID string) error
 
 	MostPopularPlan(ctx context.Context) (months int, total int, err error)
 
@@ -616,6 +648,12 @@ func (b *base) DeletePaymentsByUser(ctx context.Context, telegramID int64) error
 	return err
 }
 
+func (b *base) DeletePayment(ctx context.Context, id int64) error {
+	// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
+	_, err := b.db.ExecContext(ctx, "DELETE FROM payments WHERE id = "+b.ph(1), id)
+	return err
+}
+
 func (b *base) DeleteP2PRequestsByUser(ctx context.Context, telegramID int64) error {
 	_, err := b.db.ExecContext(ctx, "DELETE FROM p2p_requests WHERE telegram_id = "+b.ph(1), telegramID)
 	return err
@@ -847,10 +885,11 @@ func (b *base) AddPayment(ctx context.Context, p *model.Payment) error {
 	}
 	// Столкновение id — не дубль сделки, а невезение с часами: пробуем новый.
 	for attempt := 0; ; attempt++ {
+		// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 		_, err := b.db.ExecContext(ctx,
-			"INSERT INTO payments (id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot) "+
-				"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+", "+b.ph(10)+")",
-			p.ID, p.TelegramID, p.Method, p.Months, p.Amount, p.Status, p.Comment, p.ExtID, p.CreatedAt, p.Snapshot.Encode())
+			"INSERT INTO payments (id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot, captured_at) "+
+				"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+", "+b.ph(10)+", "+b.ph(11)+")",
+			p.ID, p.TelegramID, p.Method, p.Months, p.Amount, p.Status, p.Comment, p.ExtID, p.CreatedAt, p.Snapshot.Encode(), p.CapturedAt)
 		switch {
 		case err == nil:
 			return nil
@@ -925,10 +964,11 @@ func (b *base) AddPaymentAndBalance(ctx context.Context, p *model.Payment, kopec
 	// способ не потерять откат ни на одной из веток выхода.
 	defer func() { _ = tx.Rollback() }()
 
+	// #nosec G202 -- склеиваются только константы и плейсхолдеры b.ph(n), значения идут параметрами
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO payments (id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot) "+
-			"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+", "+b.ph(10)+")",
-		p.ID, p.TelegramID, p.Method, p.Months, p.Amount, p.Status, p.Comment, p.ExtID, p.CreatedAt, p.Snapshot.Encode()); err != nil {
+		"INSERT INTO payments (id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot, captured_at) "+
+			"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+", "+b.ph(10)+", "+b.ph(11)+")",
+		p.ID, p.TelegramID, p.Method, p.Months, p.Amount, p.Status, p.Comment, p.ExtID, p.CreatedAt, p.Snapshot.Encode(), p.CapturedAt); err != nil {
 		if isExtIDDuplicate(err) {
 			return ErrDuplicateExtID
 		}
@@ -1022,7 +1062,7 @@ func (b *base) ListPayments(ctx context.Context, limit, offset int) ([]model.Pay
 	for rows.Next() {
 		var p model.Payment
 		var snapRaw string
-		if err := rows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw); err != nil {
+		if err := rows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw, &p.CapturedAt); err != nil {
 			return nil, 0, err
 		}
 		p.Snapshot = model.DecodePlanSnapshot(snapRaw)
@@ -1082,7 +1122,7 @@ func (b *base) PaidPayments(ctx context.Context) ([]model.Payment, error) {
 	for rows.Next() {
 		var p model.Payment
 		var snapRaw string
-		if err := rows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw); err != nil {
+		if err := rows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw, &p.CapturedAt); err != nil {
 			return nil, err
 		}
 		p.Snapshot = model.DecodePlanSnapshot(snapRaw)
@@ -1133,7 +1173,7 @@ func (b *base) DeleteMediaFileID(ctx context.Context, section string) error {
 // несколько запросов, и расхождение между SELECT и Scan ловится только в
 // рантайме.
 const (
-	paymentCols = "id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot"
+	paymentCols = "id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot, captured_at"
 	p2pCols     = "id, telegram_id, months, price, status, screenshot, comment, created_at, decided_at, plan_snapshot, card, purpose, kopecks"
 	autoPayCols = "telegram_id, method, method_id, title, months, amount, currency, enabled, created_at, " +
 		"last_pay_at, paid_period, next_try_at, fails, last_error, plan_snapshot"
@@ -1340,7 +1380,7 @@ func (b *base) LastPaidSubPayment(ctx context.Context, telegramID int64) (*model
 		"SELECT "+paymentCols+" FROM payments WHERE telegram_id = "+b.ph(1)+
 			" AND status = "+b.ph(2)+subPaymentCond+" ORDER BY created_at DESC, id DESC LIMIT 1",
 		telegramID, model.PaymentPaid).
-		Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw)
+		Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw, &p.CapturedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1482,7 +1522,7 @@ func (b *base) Export(ctx context.Context) (*Snapshot, error) {
 	for prows.Next() {
 		var p model.Payment
 		var snapRaw string
-		if err := prows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw); err != nil {
+		if err := prows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw, &p.CapturedAt); err != nil {
 			_ = prows.Close()
 			return nil, err
 		}
@@ -2326,6 +2366,35 @@ func (b *base) CountReferrals(ctx context.Context, referrerID int64) (int, error
 	return n, err
 }
 
+func (b *base) ListReferrals(ctx context.Context, referrerID int64, limit, offset int) ([]int64, int, error) {
+	var total int
+	if err := b.db.QueryRowContext(ctx,
+		"SELECT COUNT(1) FROM users WHERE referred_by = "+b.ph(1), referrerID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if limit <= 0 || total == 0 {
+		return nil, total, nil
+	}
+	rows, err := b.db.QueryContext(ctx,
+		// #nosec G202 -- b.ph выдаёт только placeholder драйвера ($1/?), значения передаются биндовыми параметрами
+		"SELECT telegram_id FROM users WHERE referred_by = "+b.ph(1)+
+			" ORDER BY created_at DESC, telegram_id LIMIT "+b.ph(2)+" OFFSET "+b.ph(3),
+		referrerID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, id)
+	}
+	return out, total, rows.Err()
+}
+
 func (b *base) Ping(ctx context.Context) error { return b.db.PingContext(ctx) }
 
 func (b *base) SetUnreachable(ctx context.Context, telegramID int64, at string) error {
@@ -2595,48 +2664,65 @@ func (b *base) CreateInvite(ctx context.Context, inv *model.Invite) error {
 	if inv.CreatedAt == "" {
 		inv.CreatedAt = nowStr()
 	}
+	if inv.Grant == "" {
+		inv.Grant = model.InviteGrantAccess
+	}
 	// #nosec G202 -- b.ph выдаёт только placeholder драйвера ($1/?), значения передаются биндовыми параметрами
 	_, err := b.db.ExecContext(ctx,
-		"INSERT INTO invites (code, max_uses, used, expires_at, created_at, revoked, note) "+
-			"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+")",
-		inv.Code, inv.MaxUses, inv.Used, inv.ExpiresAt, inv.CreatedAt, boolToInt(inv.Revoked), inv.Note)
+		"INSERT INTO invites (code, max_uses, used, expires_at, created_at, revoked, note, created_by, grant_kind) "+
+			"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+")",
+		inv.Code, inv.MaxUses, inv.Used, inv.ExpiresAt, inv.CreatedAt, boolToInt(inv.Revoked), inv.Note, inv.CreatedBy, inv.Grant)
 	return err
 }
 
-func (b *base) GetInvite(ctx context.Context, code string) (*model.Invite, error) {
+// inviteCols — колонки приглашения в порядке scanInvite.
+const inviteCols = "code, max_uses, used, expires_at, created_at, revoked, note, created_by, grant_kind"
+
+func scanInvite(sc interface{ Scan(...any) error }) (model.Invite, error) {
 	var inv model.Invite
 	var revoked int
-	err := b.db.QueryRowContext(ctx,
-		"SELECT code, max_uses, used, expires_at, created_at, revoked, note FROM invites WHERE code = "+b.ph(1), code).
-		Scan(&inv.Code, &inv.MaxUses, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt, &revoked, &inv.Note)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
+	err := sc.Scan(&inv.Code, &inv.MaxUses, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt, &revoked, &inv.Note, &inv.CreatedBy, &inv.Grant)
 	inv.Revoked = revoked != 0
-	return &inv, nil
+	return inv, err
 }
 
-func (b *base) ListInvites(ctx context.Context) ([]model.Invite, error) {
-	rows, err := b.db.QueryContext(ctx,
-		"SELECT code, max_uses, used, expires_at, created_at, revoked, note FROM invites ORDER BY created_at DESC")
+func (b *base) queryInvites(ctx context.Context, q string, args ...any) ([]model.Invite, error) {
+	rows, err := b.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []model.Invite
 	for rows.Next() {
-		var inv model.Invite
-		var revoked int
-		if err := rows.Scan(&inv.Code, &inv.MaxUses, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt, &revoked, &inv.Note); err != nil {
+		inv, err := scanInvite(rows)
+		if err != nil {
 			return nil, err
 		}
-		inv.Revoked = revoked != 0
 		out = append(out, inv)
 	}
 	return out, rows.Err()
+}
+
+func (b *base) GetInvite(ctx context.Context, code string) (*model.Invite, error) {
+	inv, err := scanInvite(b.db.QueryRowContext(ctx,
+		"SELECT "+inviteCols+" FROM invites WHERE code = "+b.ph(1), code))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &inv, nil
+}
+
+func (b *base) ListInvites(ctx context.Context) ([]model.Invite, error) {
+	return b.queryInvites(ctx, "SELECT "+inviteCols+" FROM invites ORDER BY created_at DESC")
+}
+
+// ListInvitesBy — Приглашения одного Автора, свежие первыми.
+func (b *base) ListInvitesBy(ctx context.Context, author int64) ([]model.Invite, error) {
+	return b.queryInvites(ctx,
+		"SELECT "+inviteCols+" FROM invites WHERE created_by = "+b.ph(1)+" ORDER BY created_at DESC, code", author)
 }
 
 // UseInvite тратит одну активацию приглашения и записывает, кто пришёл.
@@ -2719,6 +2805,42 @@ func (b *base) InviteUses(ctx context.Context, code string, limit, offset int) (
 		out = append(out, u)
 	}
 	return out, total, rows.Err()
+}
+
+// RevokeInviteBy — отзыв Автором: только своё и только неиспользованное.
+// Условие стоит в самом запросе, поэтому гонку с активацией (UseInvite)
+// решает база: кто первый, тот и прав. false — отзывать нечего.
+func (b *base) RevokeInviteBy(ctx context.Context, code string, author int64) (bool, error) {
+	res, err := b.db.ExecContext(ctx,
+		// #nosec G202 -- b.ph выдаёт только placeholder драйвера ($1/?), значения передаются биндовыми параметрами
+		"UPDATE invites SET revoked = 1 WHERE code = "+b.ph(1)+" AND created_by = "+b.ph(2)+
+			" AND revoked = 0 AND (max_uses <= 0 OR used < max_uses)", code, author)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// UserInviteStats считает Приглашения пользователей (Автор не владелец):
+// сколько создано, сколько активаций записано и сколько разных активировавших
+// оплатили хотя бы один платёж.
+func (b *base) UserInviteStats(ctx context.Context) (model.UserInviteStats, error) {
+	var s model.UserInviteStats
+	if err := b.db.QueryRowContext(ctx,
+		"SELECT COUNT(1) FROM invites WHERE created_by <> 0").Scan(&s.Created); err != nil {
+		return s, err
+	}
+	const uses = "FROM invite_uses iu JOIN invites i ON i.code = iu.code WHERE i.created_by <> 0"
+	if err := b.db.QueryRowContext(ctx, "SELECT COUNT(1) "+uses).Scan(&s.Activated); err != nil {
+		return s, err
+	}
+	err := b.db.QueryRowContext(ctx,
+		// #nosec G202 -- b.ph выдаёт только placeholder драйвера ($1/?), значения передаются биндовыми параметрами
+		"SELECT COUNT(DISTINCT iu.telegram_id) "+uses+
+			" AND EXISTS (SELECT 1 FROM payments p WHERE p.telegram_id = iu.telegram_id AND p.status = "+b.ph(1)+")",
+		model.PaymentPaid).Scan(&s.Paid)
+	return s, err
 }
 
 func (b *base) RevokeInvite(ctx context.Context, code string) error {

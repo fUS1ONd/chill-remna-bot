@@ -221,8 +221,8 @@ func (a *App) adminLinkPanel(ctx context.Context, adminChat, uid int64, input st
 	}
 	a.markPanelLinked(ctx, uid, pu.ExpireAt)
 	a.log.Info("panel sync: manual link", "tg_id", uid, "panel_user", pu.Username, "panel_ref", pu.Ref.Key())
-	a.notify(ctx, uid, i18n.T(a.lang(uid), "sync.linked", formatExpire(pu.ExpireAt, a.lang(uid))))
-	a.sendHome(ctx, adminChat, i18n.T(lang, "user.link_done", escapeName(pu.Username), formatExpire(pu.ExpireAt, lang)))
+	a.notify(ctx, uid, i18n.T(a.lang(uid), "sync.linked", formatSubExpire(pu.ExpireAt, a.lang(uid))))
+	a.sendHome(ctx, adminChat, i18n.T(lang, "user.link_done", escapeName(pu.Username), formatSubExpire(pu.ExpireAt, lang)))
 }
 
 // adminLinkPanelEmail привязывает учётку к аккаунту кабинета без Telegram: в
@@ -288,7 +288,7 @@ func (a *App) adminLinkPanelEmail(ctx context.Context, adminChat, uid int64, pan
 	}
 	a.markPanelLinked(ctx, uid, pu.ExpireAt)
 	a.log.Info("panel sync: manual link by email", "tg_id", uid, "panel_user", pu.Username, "panel_ref", pu.Ref.Key())
-	a.sendHome(ctx, adminChat, i18n.T(lang, "user.link_done", escapeName(pu.Username), formatExpire(pu.ExpireAt, lang)))
+	a.sendHome(ctx, adminChat, i18n.T(lang, "user.link_done", escapeName(pu.Username), formatSubExpire(pu.ExpireAt, lang)))
 }
 
 // emailOwner — чей аккаунт кабинета находит учётку по этой почте (0 — ничей).

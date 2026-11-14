@@ -149,6 +149,9 @@ func (a *App) basePlanRow(ctx context.Context) *model.Plan {
 //  3. тарифа больше нет или он закрыт покупателю — честное сообщение и выбор
 //     нового тарифа, а не молчаливая продажа чужих условий.
 func (a *App) showRenew(ctx context.Context, chatID int64) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 	snap := a.userSnapshot(ctx, chatID)
 	code := planCodeOf(snap)

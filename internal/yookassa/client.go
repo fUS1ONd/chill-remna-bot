@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -112,6 +113,9 @@ type Payment struct {
 		Currency string `json:"currency"`
 	} `json:"refunded_amount"`
 	Metadata map[string]string `json:"metadata"`
+	// CapturedAt — момент списания денег (ISO 8601, UTC). Есть только у
+	// подтверждённого платежа; бот мог узнать о нём заметно позже.
+	CapturedAt string `json:"captured_at"`
 	// CancellationDetails — кто и почему отменил платёж (insufficient_funds,
 	// card_expired, …); без причины пользователю не объяснить, что чинить.
 	CancellationDetails struct {
@@ -130,6 +134,22 @@ type Payment struct {
 			Last4 string `json:"last4"`
 		} `json:"card"`
 	} `json:"payment_method"`
+}
+
+// Captured — момент списания денег по данным ЮKassa. Нулевое время — ЮKassa
+// его не прислала или прислала нечитаемым; нечитаемое пишется в лог, чтобы
+// сдвиг даты чека на момент финализации не прошёл молча.
+func (p *Payment) Captured() time.Time {
+	if p == nil || p.CapturedAt == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, p.CapturedAt)
+	if err != nil {
+		slog.Warn("yookassa: нечитаемый captured_at, чек датируется моментом финализации",
+			"payment", p.ID, "captured_at", p.CapturedAt, "err", err)
+		return time.Time{}
+	}
+	return t.UTC()
 }
 
 // SavedMethodTitle возвращает человекочитаемое название сохранённого способа

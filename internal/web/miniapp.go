@@ -71,7 +71,8 @@ type MiniProvider interface {
 	// аккаунт панели новичку — как /start в чате. Возвращает текст для
 	// человека (пусто — сказать нечего).
 	// cabinet — вход через кабинет (там новичков может одобрять админ).
-	MiniStart(ctx context.Context, tgID int64, param string, cabinet bool) string
+	// username и firstName — из подписи Telegram.
+	MiniStart(ctx context.Context, tgID int64, param, username, firstName string, cabinet bool) string
 	// WebUI — выбранный дизайн и брендирование страниц.
 	WebUI() WebUIDTO
 	// BrandLogo — логотип, загруженный в бота (dark — для тёмной темы).
@@ -84,6 +85,14 @@ type MiniProvider interface {
 
 	// MiniReferral returns the user's referral info (mirrors showReferral).
 	MiniReferral(ctx context.Context, tgID int64) MiniReferralDTO
+	// MiniInvites — экран «Пригласить друга» (как showUserInvites в чате):
+	// бонусы, квоты и активные Приглашения человека.
+	MiniInvites(ctx context.Context, tgID int64) MiniInvitesDTO
+	// MiniInviteCreate создаёт Приглашение от пользователя и возвращает
+	// обновлённый экран; отказ (лимит, нет права) — в Error.
+	MiniInviteCreate(ctx context.Context, tgID int64) MiniInvitesDTO
+	// MiniInviteRevoke отзывает своё неиспользованное Приглашение.
+	MiniInviteRevoke(ctx context.Context, tgID int64, code string) MiniInvitesDTO
 	// MiniPromo applies a promo code (mirrors the chat promo flow).
 	MiniPromo(ctx context.Context, tgID int64, code string) MiniPromoDTO
 	// MiniTopUpOptions returns preset top-up amounts + enabled methods.
@@ -146,6 +155,9 @@ type MiniProvider interface {
 	// whitelist) keeps this user out — the Mini App and the cabinet must honour
 	// the same gate as the chat bot.
 	MiniAccessDenied(ctx context.Context, tgID int64) bool
+	// MiniDenyText — тот же текст отказа, что видит человек без Доступа в
+	// чате, без разметки.
+	MiniDenyText(ctx context.Context, tgID int64) string
 	// CabinetFlag returns a self-hosted country-flag SVG by ISO code.
 	CabinetFlag(code string) ([]byte, bool)
 	// MiniLegalRequired reports whether the user must accept the service
@@ -177,6 +189,51 @@ type MiniReferralDTO struct {
 	CabinetLink string `json:"cabinet_link,omitempty"`
 	// CabinetFirst — у аккаунта нет Telegram: ссылку на кабинет показать первой.
 	CabinetFirst bool `json:"cabinet_first,omitempty"`
+}
+
+// MiniInvitesDTO — экран «Пригласить друга». Allowed=false — права
+// приглашать нет (тумблер выключен, нет Доступа): экран показывает Error.
+// Ответ на создание и отзыв — тот же экран после действия: OK и Message —
+// итог, Error — отказ.
+type MiniInvitesDTO struct {
+	Allowed bool   `json:"allowed"`
+	OK      bool   `json:"ok,omitempty"`
+	Message string `json:"message,omitempty"`
+	Error   string `json:"error,omitempty"`
+	// Bonus — условия рефералки и счётчики; нет, когда рефералка выключена
+	// или человек бессрочный.
+	Bonus *MiniInviteBonusDTO `json:"bonus,omitempty"`
+	// Active / MaxActive — сколько активных Приглашений и сколько можно
+	// держать; TTLDays — срок нового Приглашения.
+	Active    int             `json:"active"`
+	MaxActive int             `json:"max_active"`
+	TTLDays   int             `json:"ttl_days"`
+	Invites   []MiniInviteDTO `json:"invites"`
+}
+
+// MiniInviteBonusDTO — блок бонусов экрана приглашений (поля как у
+// MiniReferralDTO, без ref_-ссылок).
+type MiniInviteBonusDTO struct {
+	BonusValue    int    `json:"bonus_value"`
+	BonusKind     string `json:"bonus_kind"`
+	OnFirstPay    bool   `json:"on_first_pay"`
+	InviteeKind   string `json:"invitee_kind,omitempty"`
+	InviteeValue  int    `json:"invitee_value"`
+	Percent       int    `json:"percent"`
+	Count         int    `json:"count"`
+	EarnedKopecks int64  `json:"earned_kopecks"`
+}
+
+// MiniInviteDTO — одно активное Приглашение. ShareURL — выбор чата Telegram
+// с готовым текстом (пусто, если бот не знает своего @username); ShareText —
+// тот же текст со ссылками для «Скопировать» в браузере.
+type MiniInviteDTO struct {
+	Code        string `json:"code"`
+	Link        string `json:"link,omitempty"`
+	CabinetLink string `json:"cabinet_link,omitempty"`
+	ShareURL    string `json:"share_url,omitempty"`
+	ShareText   string `json:"share_text"`
+	ExpireAt    string `json:"expire_at"`
 }
 
 type MiniPromoDTO struct {
@@ -294,10 +351,18 @@ type CabinetAccountDTO struct {
 // MiniMenuDTO mirrors navRow predicates so the front-end shows exactly the
 // actions the chat bot would show this user.
 type MiniMenuDTO struct {
-	HasSub         bool `json:"has_sub"`
+	HasSub bool `json:"has_sub"`
+	// Perpetual — у человека Бессрочная подписка: сервер уже убрал покупку,
+	// продление, триал, автопродление и пополнение, а фронт по нему прячет
+	// ещё и кошелёк.
+	Perpetual      bool `json:"perpetual,omitempty"`
 	CanRenew       bool `json:"can_renew"`
 	TrialAvailable bool `json:"trial_available"`
 	ReferralOn     bool `json:"referral_on"`
+	// UserInvites — вместо рефералки пункт «Пригласить друга» с экраном
+	// Приглашений (как в чате). С включённым тумблером ReferralOn ложно
+	// всегда: ref_-ссылка в этом режиме не показывается.
+	UserInvites bool `json:"user_invites,omitempty"`
 	// TopUpOn — включено ли пополнение баланса. Кошелёк как таковой остаётся:
 	// на баланс приходят реферальные начисления, тратить их можно всегда.
 	TopUpOn    bool     `json:"topup_on"`
@@ -342,7 +407,10 @@ type MiniLegalDTO struct {
 }
 
 type MiniSubDTO struct {
-	Active      bool   `json:"active"`
+	Active bool `json:"active"`
+	// Perpetual — Бессрочная подписка: ExpireAt — «Бессрочная», ExpireTS не
+	// присылается, «осталось N дней» фронт не рисует.
+	Perpetual   bool   `json:"perpetual,omitempty"`
 	Status      string `json:"status"`
 	ExpireAt    string `json:"expire_at"`
 	ExpireTS    int64  `json:"expire_ts,omitempty"`
@@ -550,7 +618,8 @@ func (s *Server) handleMiniAuth(w http.ResponseWriter, r *http.Request) {
 	notice := ""
 	if p := initDataStartParam(req.InitData); p != "" {
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		notice = s.mini.MiniStart(ctx, tgID, p, false)
+		username, first := initDataUserName(req.InitData)
+		notice = s.mini.MiniStart(ctx, tgID, p, username, first, false)
 		cancel()
 	}
 	tok := issueJWT(tgID, false, jwtKey(s.mini.MiniBotToken()), jwtTTL, s.mini.SessionVersion(), s.mini.SessionEpoch(r.Context(), tgID))
@@ -613,7 +682,7 @@ func (s *Server) miniGuard(w http.ResponseWriter, r *http.Request) (id int64, we
 		return 0, false, false
 	}
 	if s.mini.MiniAccessDenied(r.Context(), id) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "доступ к боту ограничен"})
+		s.writeAccessDenied(r.Context(), w, id)
 		return 0, false, false
 	}
 	// Модерация кабинета проверяется на КАЖДОМ запросе, а не только на входе:
@@ -649,6 +718,12 @@ func (s *Server) miniGuard(w http.ResponseWriter, r *http.Request) (id int64, we
 		return 0, false, false
 	}
 	return id, web, true
+}
+
+// writeAccessDenied — отказ Закрытого входа: 403 с признаком access_denied,
+// по которому фронт рисует экран «нужно приглашение», а не общую ошибку.
+func (s *Server) writeAccessDenied(ctx context.Context, w http.ResponseWriter, tgID int64) {
+	writeJSON(w, http.StatusForbidden, map[string]any{"error": s.mini.MiniDenyText(ctx, tgID), "access_denied": true})
 }
 
 func (s *Server) handleMiniMe(w http.ResponseWriter, r *http.Request) {
@@ -825,6 +900,48 @@ func (s *Server) handleMiniReferral(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	writeJSON(w, http.StatusOK, s.mini.MiniReferral(ctx, id))
+}
+
+func (s *Server) handleMiniInvites(w http.ResponseWriter, r *http.Request) {
+	id, _, ok := s.miniGuard(w, r)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.mini.MiniInvites(ctx, id))
+}
+
+func (s *Server) handleMiniInviteCreate(w http.ResponseWriter, r *http.Request) {
+	id, _, ok := s.miniGuard(w, r)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.mini.MiniInviteCreate(ctx, id))
+}
+
+func (s *Server) handleMiniInviteRevoke(w http.ResponseWriter, r *http.Request) {
+	id, _, ok := s.miniGuard(w, r)
+	if !ok {
+		return
+	}
+	body, err := readAllLimited(r, 1024)
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Code) == "" {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.mini.MiniInviteRevoke(ctx, id, strings.TrimSpace(req.Code)))
 }
 
 func (s *Server) handleMiniPromo(w http.ResponseWriter, r *http.Request) {

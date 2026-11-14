@@ -30,7 +30,6 @@ import (
 	"remnabot/internal/hostctl"
 	"remnabot/internal/i18n"
 	"remnabot/internal/model"
-	"remnabot/internal/moynalog"
 	"remnabot/internal/remnawave"
 	"remnabot/internal/rsimport"
 	"remnabot/internal/storage"
@@ -228,6 +227,13 @@ type App struct {
 	// конвертировался бы дважды. Берётся ПОСЛЕ finalizeLk, порядок строгий.
 	finalizeUserLk [finalizeLockShards]sync.Mutex
 
+	// userInviteMu сериализует проверку лимитов и создание Приглашений от
+	// пользователей: двойное нажатие не проскакивает лимит активных.
+	userInviteMu sync.Mutex
+	// redeemLk сериализует активацию Приглашений по человеку (striped): два
+	// кода подряд не тратят второй.
+	redeemLk [finalizeLockShards]sync.Mutex
+
 	// checkoutLk сериализует оплату с баланса из мини-аппа по «человек+тариф+
 	// срок». Запросы веб-сервера идут параллельно (в чате апдейты по
 	// очереди), а ключ сделки там строится из конца срока, прочитанного ДО
@@ -237,6 +243,11 @@ type App struct {
 	// Отдельный набор замков, а НЕ finalizeUserLk: тот берёт finalizePurchase
 	// внутри, и повторный захват здесь означал бы взаимную блокировку.
 	checkoutLk [finalizeLockShards]sync.Mutex
+	// autoPayLk сериализует автосписание одного человека и отвязку его
+	// карты: отвязка ждёт идущее списание, а следующее уже не найдёт записи.
+	// Внешний по отношению к finalizeLk/finalizeUserLk: списание под ним
+	// вызывает finalizePurchase, обратного порядка нет.
+	autoPayLk [finalizeLockShards]sync.Mutex
 	// recentBuy — когда по этому ключу только что прошла покупка. Замок
 	// защищает от одновременности, а это — от двойного тапа с паузой:
 	// после выдачи конец срока уже другой, и ключ сделки не совпадёт.
@@ -316,8 +327,14 @@ type App struct {
 	botUser   string
 
 	mnMu     sync.Mutex
-	mnClient *moynalog.Client
+	mnClient moyNalogAPI
 	mnKey    string
+	// mnNew создаёт клиента «Мой налог»; nil — настоящий. Тесты подставляют
+	// сюда фейк ФНС.
+	mnNew func(login, pass string) moyNalogAPI
+	// receiptBusy — чеки, по которым прямо сейчас идёт обращение к ФНС
+	// (ключ receiptKey). Второй путь к тому же чеку его пропускает.
+	receiptBusy sync.Map
 
 	payLogPurgedAt time.Time
 
@@ -399,8 +416,11 @@ func (a *App) spawn(f func()) {
 }
 
 type subCacheEntry struct {
-	has      bool
-	expireAt time.Time
+	has bool
+	// subExpire — срок окончания подписки из панели (RFC3339), по нему
+	// узнаётся Бессрочная подписка.
+	subExpire string
+	expireAt  time.Time
 }
 
 func New(cfg *config.Config, crypter *crypto.Crypter, log *slog.Logger) *App {
@@ -881,8 +901,8 @@ func (a *App) handleMessage(ctx context.Context, m *models.Message) {
 	// Ссылка-приглашение обрабатывается ДО проверки режима публичности: иначе
 	// приглашённый упрётся в «нужно приглашение» и ссылка никогда не сработает.
 	if !isAdmin && strings.HasPrefix(text, "/start ") {
-		if code, isInv := strings.CutPrefix(strings.TrimSpace(strings.TrimPrefix(text, "/start ")), "inv_"); isInv && code != "" {
-			if msg, ok := a.redeemInvite(ctx, chatID, code); msg != "" {
+		if code, isInv := inviteParam(strings.TrimPrefix(text, "/start ")); isInv {
+			if msg, ok := a.redeemInvite(ctx, chatID, code, username, firstName); msg != "" {
 				a.msg.Delete(ctx, chatID, m.ID)
 				a.send(ctx, chatID, msg)
 				if !ok {
@@ -1781,14 +1801,14 @@ func hasChat(id int64) bool { return id > 0 }
 
 // Уведомления адресату без чата в Telegram (аккаунт кабинета по почте —
 // отрицательный id) не отправляются вовсе: это только лишний запрос и
-// ошибка «chat not found» в логе.
-func (a *App) notify(ctx context.Context, chatID int64, text string) {
+// ошибка «chat not found» в логе. Результат — принял ли Telegram сообщение.
+func (a *App) notify(ctx context.Context, chatID int64, text string) bool {
 	if !hasChat(chatID) {
-		return
+		return false
 	}
 	id := a.msg.SendKB(ctx, chatID, a.applyPremium(text), [][]models.InlineKeyboardButton{backHomeRow(a.lang(chatID))})
 	if id == 0 {
-		return
+		return false
 	}
 	a.scrMu.Lock()
 	defer a.scrMu.Unlock()
@@ -1801,6 +1821,7 @@ func (a *App) notify(ctx context.Context, chatID int64, text string) {
 		n = n[len(n)-20:]
 	}
 	a.notices[chatID] = n
+	return true
 }
 
 // noticeThen показывает короткое пояснение и сразу под ним экран. Пояснение

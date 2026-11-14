@@ -83,7 +83,7 @@ func TestInviteUses_OpenModeMarksNewcomers(t *testing.T) {
 	a.handleMessage(ctx, msgText(1000000003, "/start inv_opencode"))
 	a.handleMessage(ctx, msgText(1000000004, "/start inv_opencode"))
 	a.handleMessage(ctx, msgText(1000000003, "/start inv_opencode"))
-	a.MiniStart(ctx, 1000000005, "inv_opencode", false)
+	a.MiniStart(ctx, 1000000005, "inv_opencode", "", "", false)
 	a.handleMessage(ctx, msgText(1000000006, "/start inv_revcode"))
 
 	got := inviteUsers(t, fs, "opencode")
@@ -116,7 +116,7 @@ func TestInviteUses_DeleteClears(t *testing.T) {
 	ctx := context.Background()
 	a.setAccessMode(ctx, model.AccessInvite, false)
 	_ = fs.CreateInvite(ctx, &model.Invite{Code: "gone", MaxUses: 0})
-	if _, ok := a.redeemInvite(ctx, 1000000007, "gone"); !ok {
+	if _, ok := a.redeemInvite(ctx, 1000000007, "gone", "", ""); !ok {
 		t.Fatal("приглашение не сработало")
 	}
 	a.onAccess(ctx, 100, "del:gone")

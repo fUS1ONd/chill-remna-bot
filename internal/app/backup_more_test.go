@@ -816,7 +816,7 @@ func TestRestoreGuardTopUp(t *testing.T) {
 	if err := st.AddPendingInvoice(ctx, pi); err != nil {
 		t.Fatal(err)
 	}
-	if a.reconcileFinalize(ctx, st, pi, "500.00 RUB") {
+	if a.reconcileFinalize(ctx, st, pi, "500.00 RUB", time.Time{}) {
 		t.Fatal("пополнение из окна выдано")
 	}
 	a.flushReview(ctx)
@@ -829,7 +829,7 @@ func TestRestoreGuardTopUp(t *testing.T) {
 	fresh := &model.PendingInvoice{Method: model.PayMethodPlatega, ExtID: "pl-new", TelegramID: 1000000001, Purpose: "topup",
 		Kopecks: 100, CreatedAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339)}
 	_ = st.AddPendingInvoice(ctx, fresh)
-	a.reconcileFinalize(ctx, st, fresh, "1.00 RUB")
+	a.reconcileFinalize(ctx, st, fresh, "1.00 RUB", time.Time{})
 	a.flushReview(ctx)
 	if strings.Count(fm.joined(), "Оплаты на ручную проверку") != n {
 		t.Fatal("свежий счёт ушёл на проверку")
@@ -1013,14 +1013,14 @@ func TestReviewNotDeliveredKeepsInvoice(t *testing.T) {
 		return len(l)
 	}
 	fm.kbFail = true
-	a.reconcileFinalize(ctx, st, pi, "1 RUB")
+	a.reconcileFinalize(ctx, st, pi, "1 RUB", time.Time{})
 	a.flushReview(ctx)
 	fm.kbFail = false
 	if open() != 1 {
 		t.Fatal("счёт закрыт, хотя список не дошёл")
 	}
 	list, _ := st.ListUnresolvedPending(ctx, time.Now().UTC().Format(time.RFC3339), 10)
-	a.reconcileFinalize(ctx, st, &list[0], "1 RUB")
+	a.reconcileFinalize(ctx, st, &list[0], "1 RUB", time.Time{})
 	a.flushReview(ctx)
 	if open() != 0 || !strings.Contains(fm.joined(), "yk-w") || !strings.Contains(fm.joined(), "ЮKassa") {
 		t.Fatalf("после доставки счёт не закрыт или способ оплаты не назван: %q", lastText(fm))

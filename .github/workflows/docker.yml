@@ -17,6 +17,8 @@ permissions:
 
 jobs:
   docker:
+    # В форке образ собирает fork-image.yml; здесь — только у автора.
+    if: github.repository_owner == 'Mrvibecodic'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

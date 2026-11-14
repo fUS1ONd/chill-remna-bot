@@ -176,7 +176,7 @@ func (a *App) onYKCheck(ctx context.Context, chatID int64, payID string) {
 			amount := pay.Amount.Value + " " + pay.Amount.Currency
 			// Гасим счёт только при успехе — см. finalizeTopUp: иначе
 			// неудачное зачисление уносит пополнение вместе со страховкой.
-			if err := a.finalizeTopUp(ctx, p.TelegramID, p.Kopecks, model.PayMethodYooKassa, amount, payID); err != nil {
+			if err := a.finalizeTopUpAt(ctx, p.TelegramID, p.Kopecks, model.PayMethodYooKassa, amount, payID, pay.Captured()); err != nil {
 				a.log.Error("yookassa topup finalize", "err", err, "ext_id", payID)
 				return
 			}
@@ -208,7 +208,7 @@ func (a *App) onYKCheck(ctx context.Context, chatID int64, payID string) {
 		return
 	}
 	amount := pay.Amount.Value + " " + pay.Amount.Currency
-	link, expireAt, err := a.finalizePurchase(ctx, payChat, months, model.PayMethodYooKassa, amount, payID, a.pendingSnapshot(ctx, payID))
+	link, expireAt, err := a.finalizePurchaseAt(ctx, payChat, months, model.PayMethodYooKassa, amount, payID, a.pendingSnapshot(ctx, payID), pay.Captured())
 	if err != nil {
 		a.sendHome(ctx, chatID, a.clientErr(ctx, chatID, "ЮKassa", err))
 		return

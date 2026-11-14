@@ -507,7 +507,7 @@ func TestReconcile_DeletedUserIsNotResurrected(t *testing.T) {
 	if err := fs.AddPendingInvoice(ctx, pi); err != nil {
 		t.Fatal(err)
 	}
-	if ok := a.reconcileFinalize(ctx, fs, pi, "500.00 RUB"); ok {
+	if ok := a.reconcileFinalize(ctx, fs, pi, "500.00 RUB", time.Time{}); ok {
 		t.Fatal("подписка выдана удалённому пользователю")
 	}
 	if u, _ := fs.GetUser(ctx, gone); u != nil {

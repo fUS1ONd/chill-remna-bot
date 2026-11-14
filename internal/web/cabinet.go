@@ -206,9 +206,15 @@ func (s *Server) handleCabinetTelegramAuth(w http.ResponseWriter, r *http.Reques
 	// До заведения пользователя: привязка к пригласившему действует только
 	// для новичка.
 	if st := strings.TrimSpace(req.Start); st != "" && len(st) <= 64 {
-		s.mini.MiniStart(ctx, tgID, st, true)
+		s.mini.MiniStart(ctx, tgID, st, u.Username, u.FirstName, true)
 	}
 	s.mini.CabinetEnsureUser(ctx, tgID)
+	// Закрытый вход отказывает тем же признаком, что и ручки мини-аппа:
+	// страница входа рисует экран отказа, а не всплывающую ошибку.
+	if s.mini.MiniAccessDenied(ctx, tgID) {
+		s.writeAccessDenied(ctx, w, tgID)
+		return
+	}
 	if err := s.mini.CabinetGate(ctx, tgID, false); err != nil {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 		return

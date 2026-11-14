@@ -174,8 +174,30 @@ func TestMoveAccount(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// Приглашения, розданные аккаунтом, и его собственная активация уходят
+		// с ним; отметка «пришёл по ссылке» на целевом номере дублем первичного
+		// ключа переезд не роняет.
+		if err := st.CreateInvite(ctx, &model.Invite{Code: "mine", MaxUses: 1, CreatedBy: from}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.CreateInvite(ctx, &model.Invite{Code: "came", MaxUses: 2}); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := st.UseInvite(ctx, "came", from, false); err != nil || !ok {
+			t.Fatalf("активация: ok=%v err=%v", ok, err)
+		}
+		if _, err := st.UseInvite(ctx, "came", to, true); err != nil {
+			t.Fatal(err)
+		}
+
 		if err := st.MoveAccount(ctx, from, to); err != nil {
 			t.Fatalf("перенос: %v", err)
+		}
+		if list, err := st.ListInvitesBy(ctx, to); err != nil || len(list) != 1 || list[0].Code != "mine" {
+			t.Fatalf("приглашения аккаунта: %+v err=%v", list, err)
+		}
+		if uses, n, err := st.InviteUses(ctx, "came", 10, 0); err != nil || n != 1 || uses[0].TelegramID != to {
+			t.Fatalf("активация не переехала: %+v n=%d err=%v", uses, n, err)
 		}
 		if u, _ := st.GetUser(ctx, from); u != nil {
 			t.Fatal("прежняя строка обязана исчезнуть")

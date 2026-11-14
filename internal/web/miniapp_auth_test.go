@@ -17,6 +17,11 @@ func buildInitData(botToken string, tgID int64, authDate time.Time) string {
 	v := url.Values{}
 	v.Set("auth_date", strconv.FormatInt(authDate.Unix(), 10))
 	v.Set("user", `{"id":`+strconv.FormatInt(tgID, 10)+`,"first_name":"T"}`)
+	return signInitData(v, botToken)
+}
+
+// signInitData подписывает произвольные поля initData, как Telegram.
+func signInitData(v url.Values, botToken string) string {
 	keys := make([]string, 0, len(v))
 	for k := range v {
 		keys = append(keys, k)

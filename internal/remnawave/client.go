@@ -1177,6 +1177,32 @@ func (c *Client) ExtendUserDays(ctx context.Context, telegramID int64, days, ext
 	return c.upsertCall(ctx, http.MethodPost, "/api/users", body)
 }
 
+// GrantPerpetual выдаёт Бессрочную подписку со сроком expire и без лимита
+// трафика. Учётки нет — создаётся с лимитами limits (сквады, устройства,
+// стратегия). Учётка есть — меняются только срок и трафик: свои сквады и
+// устройства человека остаются как были.
+func (c *Client) GrantPerpetual(ctx context.Context, telegramID int64, expire string, limits UserLimits) (string, string, error) {
+	existing, err := c.findByTelegram(ctx, telegramID)
+	if err != nil {
+		return "", "", err
+	}
+	if existing != nil && !existing.ref().Empty() {
+		if !ownedByBot(existing, telegramID) {
+			return "", "", fmt.Errorf("аккаунт этого пользователя создан НЕ через бота — изменять его запрещено")
+		}
+		patch := existing.ref().apply(map[string]any{"expireAt": expire, "trafficLimitBytes": 0})
+		return c.upsertCall(ctx, http.MethodPatch, "/api/users", patch)
+	}
+	limits.TrafficBytes, limits.TrafficSet = 0, true
+	lim, err := c.liveLimits(ctx, limits, true)
+	if err != nil {
+		return "", "", err
+	}
+	body := newUserBody(telegramID, expire)
+	applyLimits(body, lim)
+	return c.upsertCall(ctx, http.MethodPost, "/api/users", body)
+}
+
 func applyLimits(body map[string]any, l UserLimits) {
 	if l.TrafficSet || l.TrafficBytes > 0 {
 		body["trafficLimitBytes"] = l.TrafficBytes

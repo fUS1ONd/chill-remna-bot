@@ -26,6 +26,14 @@ type fakeMini struct {
 	start   string
 	payURL  string
 	since   int64
+	// denied — человека не пускает Закрытый вход; invites — что видел
+	// двойник ручек Приглашений.
+	denied  bool
+	invites []string
+	// tgStart — параметр входа, дошедший до MiniStart.
+	tgStart string
+	// tgName — @username и имя, дошедшие до MiniStart («username|имя»).
+	tgName string
 }
 
 const fakeBotToken = "123456:TESTTOKEN"
@@ -48,7 +56,7 @@ func (f *fakeMini) CabinetBotUsername() string {
 }
 func (f *fakeMini) SessionEpoch(context.Context, int64) int         { return f.epoch }
 func (f *fakeMini) MiniBlocked(context.Context, int64) bool         { return false }
-func (f *fakeMini) MiniAccessDenied(context.Context, int64) bool    { return false }
+func (f *fakeMini) MiniAccessDenied(context.Context, int64) bool    { return f.denied }
 func (f *fakeMini) MiniLegalRequired(context.Context, int64) bool   { return false }
 func (f *fakeMini) CabinetGate(context.Context, int64, bool) error  { return nil }
 func (f *fakeMini) CabinetMoneyBlocked(context.Context, int64) bool { return f.blocked }
@@ -249,6 +257,12 @@ func TestCabinetRegisterPassesStart(t *testing.T) {
 		`{"email":"a@example.com","password":"password1","start":"ref_1000000001"}`, "", "203.0.113.40"))
 	if w.Code != http.StatusOK || f.start != "ref_1000000001" {
 		t.Fatalf("регистрация: code=%d start=%q", w.Code, f.start)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, gateReq(http.MethodPost, "/api/cabinet/auth/register",
+		`{"email":"c@example.com","password":"password1","start":"inv_c1"}`, "", "203.0.113.42"))
+	if w.Code != http.StatusOK || f.start != "inv_c1" {
+		t.Fatalf("регистрация с приглашением: code=%d start=%q", w.Code, f.start)
 	}
 	f.start = ""
 	w = httptest.NewRecorder()

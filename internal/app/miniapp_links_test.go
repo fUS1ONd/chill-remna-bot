@@ -104,15 +104,15 @@ func TestMiniStart_Referral(t *testing.T) {
 	_ = fs.UpsertUser(ctx, ref)
 	_ = fs.UpsertUser(ctx, old)
 
-	a.MiniStart(ctx, fresh, "ref_1000000010", false)
+	a.MiniStart(ctx, fresh, "ref_1000000010", "", "", false)
 	if u, _ := fs.GetUser(ctx, fresh); u == nil || u.ReferredBy != ref {
 		t.Fatalf("новичок не привязан к пригласившему: %+v", u)
 	}
-	a.MiniStart(ctx, old, "ref_1000000010", false)
+	a.MiniStart(ctx, old, "ref_1000000010", "", "", false)
 	if u, _ := fs.GetUser(ctx, old); u.ReferredBy != 0 {
 		t.Fatal("существующий пользователь привязан задним числом")
 	}
-	a.MiniStart(ctx, -1000000013, "ref_1000000010", false)
+	a.MiniStart(ctx, -1000000013, "ref_1000000010", "", "", false)
 	if u, _ := fs.GetUser(ctx, -1000000013); u != nil {
 		t.Fatal("аккаунт по почте заведён по ссылке")
 	}
@@ -199,7 +199,7 @@ func TestMiniStart_CabinetApproval(t *testing.T) {
 	a.botCfg.Cabinet.Approval = model.CabinetApprovalTG
 	const ref, fresh int64 = 1000000050, 1000000051
 	_ = fs.UpsertUser(ctx, ref)
-	a.MiniStart(ctx, fresh, "ref_1000000050", true)
+	a.MiniStart(ctx, fresh, "ref_1000000050", "", "", true)
 	u, _ := fs.GetUser(ctx, fresh)
 	if u == nil || u.ReferredBy != ref {
 		t.Fatalf("реферал не привязан до одобрения: %+v", u)
@@ -224,7 +224,7 @@ func TestMiniStart_CabinetApprovalBonusOnPay(t *testing.T) {
 	a.botCfg.Cabinet.Approval = model.CabinetApprovalTG
 	const ref, fresh, chat int64 = 1000000052, 1000000053, 1000000054
 	_ = fs.UpsertUser(ctx, ref)
-	a.MiniStart(ctx, fresh, "ref_1000000052", true)
+	a.MiniStart(ctx, fresh, "ref_1000000052", "", "", true)
 	if r, _ := fs.GetUser(ctx, ref); r.Balance != 0 {
 		t.Fatalf("бонус до одобрения: %d", r.Balance)
 	}
@@ -236,7 +236,7 @@ func TestMiniStart_CabinetApprovalBonusOnPay(t *testing.T) {
 		t.Fatalf("после оплаты бонуса нет: %d", r.Balance)
 	}
 	// Чат — как раньше: сразу, и оплата не повторяет.
-	a.MiniStart(ctx, chat, "ref_1000000052", false)
+	a.MiniStart(ctx, chat, "ref_1000000052", "", "", false)
 	if r, _ := fs.GetUser(ctx, ref); r.Balance != 10000 {
 		t.Fatalf("бонус за вход в мини-апп: %d", r.Balance)
 	}

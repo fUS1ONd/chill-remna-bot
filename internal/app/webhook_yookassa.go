@@ -124,7 +124,7 @@ func (a *App) HandleYooKassaWebhook(ctx context.Context, body []byte) (bool, err
 	if a.store != nil {
 		if p, _ := a.store.PendingByExtID(ctx, n.Object.ID); p != nil && p.Purpose == "topup" {
 			amount := pay.Amount.Value + " " + pay.Amount.Currency
-			if err := a.finalizeTopUp(ctx, p.TelegramID, p.Kopecks, model.PayMethodYooKassa, amount, n.Object.ID); err != nil {
+			if err := a.finalizeTopUpAt(ctx, p.TelegramID, p.Kopecks, model.PayMethodYooKassa, amount, n.Object.ID, pay.Captured()); err != nil {
 				return false, fmt.Errorf("topup yookassa %s: %w", n.Object.ID, err)
 			}
 			_ = a.store.ResolvePending(ctx, p.ID)
@@ -157,7 +157,7 @@ func (a *App) HandleYooKassaWebhook(ctx context.Context, body []byte) (bool, err
 		return true, nil
 	}
 	amount := pay.Amount.Value + " " + pay.Amount.Currency
-	link, expireAt, err := a.finalizePurchase(ctx, chatID, months, model.PayMethodYooKassa, amount, n.Object.ID, a.pendingSnapshot(ctx, n.Object.ID))
+	link, expireAt, err := a.finalizePurchaseAt(ctx, chatID, months, model.PayMethodYooKassa, amount, n.Object.ID, a.pendingSnapshot(ctx, n.Object.ID), pay.Captured())
 	if err != nil {
 		if errors.Is(err, storage.ErrDuplicateExtID) {
 			a.log.Info("yookassa webhook: race lost (other delivery won)", "id", n.Object.ID)

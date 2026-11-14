@@ -360,6 +360,9 @@ var L={ru:{
  no_withdraw:'Баланс тратится только на подписку. Вывод средств невозможен.',
  promo:'Промокод',promo_wait_mail:'Подтвердите почту — промокод применится после этого',promo_ph:'Введите код',apply:'Применить',promo_hint:'Промокод добавит дни, трафик или деньги на баланс.',
  ref:'Пригласить друга',ref_you:'Вам',ref_friend:'Другу',ref_pct:'С каждой его оплаты',ref_first:'за первую оплату друга',ref_reg:'за регистрацию друга',
+ uinv_lead:'Бот закрытый: друг войдёт только по вашему приглашению.',uinv_list:'Приглашения',uinv_rules:'Приглашение одноразовое и действует %s дн. Активных: %s из %s.',
+ uinv_until:'Действует до %s',uinv_new:'Создать приглашение',uinv_revoke:'Отозвать',uinv_off:'Приглашать друзей сейчас нельзя.',
+ denied_title:'Бот закрытый',denied_text:'Войти можно только по приглашению от друга.',denied_other:'Войти другим аккаунтом',
  ref_count:'Приглашено',ref_earned:'Заработано',share:'Поделиться',ref_share_text:'Подключайся по моей ссылке — будет бонус 🎁',days_short:'дн.',
  devices_title:'Устройства',devices_reset:'Сбросить устройства',devices_ask:'Сбросить все устройства?\n\nОни отключатся, а ключи доступа обновятся. Чтобы снова подключиться, обновите подписку на каждом нужном устройстве.',
  devices_done:'Готово. Обновите подписку на устройствах',devices_none:'Подключённых устройств пока нет',dev_hint:'Устройство появляется здесь после первого подключения по ссылке подписки. Сброс отключает все устройства и меняет ключи доступа.',dev_empty_hint:'Установите приложение и добавьте подписку — устройство появится здесь.',ref_link:'Ваша ссылка',ref_site:'Ссылка на сайт — для друзей без Telegram',ref_tg:'Ссылка на бота в Telegram',ref_qr_site:'Покажите QR-код другу — он откроет сайт по вашей ссылке.',ref_qr:'Покажите QR-код другу — он откроет бота по вашей ссылке.',devices_fail:'Не удалось сбросить устройства',
@@ -415,6 +418,9 @@ var L={ru:{
  no_withdraw:'Balance is spent on the subscription only. Withdrawals are not possible.',
  promo:'Promo code',promo_wait_mail:'Confirm your email — the promo code will apply after that',promo_ph:'Enter code',apply:'Apply',promo_hint:'A promo code adds days, traffic or balance.',
  ref:'Invite a friend',ref_you:'You get',ref_friend:'Your friend gets',ref_pct:'From each of their payments',ref_first:'for the friend’s first payment',ref_reg:'for the friend’s sign-up',
+ uinv_lead:'This bot is invite-only: a friend can join only with your invite.',uinv_list:'Invites',uinv_rules:'An invite works once and is valid for %s days. Active: %s of %s.',
+ uinv_until:'Valid until %s',uinv_new:'Create an invite',uinv_revoke:'Revoke',uinv_off:'Inviting friends is not available right now.',
+ denied_title:'Invite-only bot',denied_text:'You can only join with an invite from a friend.',denied_other:'Sign in with another account',
  ref_count:'Invited',ref_earned:'Earned',share:'Share',ref_share_text:'Join with my link — you get a bonus 🎁',days_short:'d',
  devices_title:'Devices',devices_reset:'Reset devices',devices_ask:'Reset all devices?\n\nThey will be disconnected and access keys will change. To reconnect, update the subscription on each device you need.',
  devices_done:'Done. Update the subscription on your devices',devices_none:'No connected devices yet',dev_hint:'A device shows up here after it first connects with your subscription link. Reset disconnects every device and changes the access keys.',dev_empty_hint:'Install an app and add the subscription — the device will show up here.',ref_link:'Your link',ref_site:'Website link — for friends without Telegram',ref_tg:'Bot link in Telegram',ref_qr_site:'Show this QR code to a friend — it opens the website with your link.',ref_qr:'Show this QR code to a friend — it opens the bot with your link.',devices_fail:'Could not reset devices',
@@ -547,10 +553,10 @@ function brandHTML(big){
   return '<span'+cls+' style="display:flex;align-items:center;gap:10px;min-width:0">'+h+(name?'<span class="nm">'+esc(name)+'</span>':'')+'</span>';
 }
 function paintBrand(){document.getElementById('brand').innerHTML=brandHTML(false);}
-function paintBalance(){var b=document.getElementById('bal');if(TOKEN&&STATE.me){b.style.display='inline-flex';b.innerHTML=IC.wallet+esc(rub(STATE.balanceK));}else{b.style.display='none';b.innerHTML='';}}
+function paintBalance(){var b=document.getElementById('bal');if(TOKEN&&STATE.me&&!(STATE.menu&&STATE.menu.perpetual)){b.style.display='inline-flex';b.innerHTML=IC.wallet+esc(rub(STATE.balanceK));}else{b.style.display='none';b.innerHTML='';}}
 
 /* ---------- API ---------- */
-function mkErr(st,m){var e=new Error(m||('HTTP '+st));e.status=st;return e;}
+function mkErr(st,m,den){var e=new Error(m||('HTTP '+st));e.status=st;e.denied=!!den;return e;}
 async function authenticate(){
   var a=await api('/api/miniapp/auth',{method:'POST',body:JSON.stringify({init_data:tg.initData}),noRetry:true});
   TOKEN=a.token;if(a.notice&&!STATE.noticeShown){STATE.noticeShown=true;setTimeout(function(){toast(a.notice);},400);}return TOKEN;
@@ -567,7 +573,8 @@ async function api(path,opts){
   }
   // Истёкший пропуск кабинета — на вход, а не ошибка на каждом нажатии.
   if(r.status===401&&WEB&&TOKEN&&path.indexOf('/api/cabinet/auth/')<0){logout();throw mkErr(401,T('login'));}
-  if(!r.ok){var m=null;try{var j=await r.json();if(j&&j.error)m=j.error;}catch(e){}throw mkErr(r.status,m);}
+  // access_denied — отказ Закрытого входа: по нему рисуется экран отказа.
+  if(!r.ok){var m=null,den=false;try{var j=await r.json();if(j&&j.error)m=j.error;den=!!(j&&j.access_denied);}catch(e){}throw mkErr(r.status,m,den);}
   return r.json();
 }
 function post(p,b){return api(p,{method:'POST',body:JSON.stringify(b||{})});}
@@ -596,7 +603,7 @@ function rerender(){if(CUR)SCREENS[CUR.name](CUR.arg);}
 function startGate(x){return x&&x.name==='legalgate'&&!x.arg;}
 function sideOn(){if(DESK&&TOKEN&&BOOTING&&!STATE.me)return true;return !!(DESK&&TOKEN&&STATE.me&&CUR&&CUR.name!=='login'&&CUR.name!=='forgot'&&!startGate(CUR)&&!STACK.some(startGate));}
 // Раздел меню для открытого экрана; экран без своего раздела оставляет прежний.
-var SECTS={home:'home',plans:'plans',plan:'plans',checkout:'plans',wallet:'wallet',promo:'wallet',connect:'connect',devices:'devices',ref:'ref',account:'account',docs:'docs',doc:'docs',theme:'account'};
+var SECTS={home:'home',plans:'plans',plan:'plans',checkout:'plans',wallet:'wallet',promo:'wallet',connect:'connect',devices:'devices',ref:'ref',uinv:'uinv',account:'account',docs:'docs',doc:'docs',theme:'account'};
 // К списку тарифов с экрана тарифа: пришли из списка — просто назад, иначе
 // список встаёт на место тарифа, и «Назад» в нём ведёт туда же, куда вёл бы.
 function toPlans(){var t=STACK[STACK.length-1];if(t&&t.name==='plans'){goBack();return;}go('plans',undefined,{replace:true});}
@@ -617,10 +624,12 @@ function renderSide(on){
   var h='<div class="sbrand" onclick="goHome()">'+brandHTML(false)+'</div>';
   h+=it('home',IC.bolt,T('home'),'goHome()');
   if(STATE.plans.length)h+=it('plans',IC.tag,T('plans'),'navTo(\'plans\')');
-  h+=it('wallet',IC.wallet,T('wallet'),'navTo(\'wallet\')',rub(STATE.balanceK));
+  // Бессрочному кошелёк не нужен: начислять на него нечего, платить не за что.
+  if(!m.perpetual)h+=it('wallet',IC.wallet,T('wallet'),'navTo(\'wallet\')',rub(STATE.balanceK));
   if(s.sub_url)h+=it('connect',IC.download,T('conn_title'),'navTo(\'connect\')');
   if(s.active)h+=it('devices',IC.device,T('devices_title'),'navTo(\'devices\')',s.devices_ok?(s.has_limit?(s.devices_used+' / '+s.device_limit):String(s.devices_used)):'');
   if(m.referral_on)h+=it('ref',IC.gift,T('ref'),'navTo(\'ref\')');
+  if(m.user_invites)h+=it('uinv',IC.gift,T('ref'),'navTo(\'uinv\')');
   h+=it('account',IC.user,T('acct'),'navTo(\'account\')');
   var ext='';
   if(legalDocs().length&&m.legal_in_menu)ext+=it('docs',IC.doc,T('docs'),'navTo(\'docs\')');
@@ -691,7 +700,7 @@ function subCard(){
   if(s.active){
     h+='<div class="card sub"><div class="st"><span class="lbl">'+esc(T('sub'))+'</span>'+statusBadge(s)+'</div>';
     if(s.expire_ts){var dl=daysLeft(s.expire_ts);h+='<div class="days"><b>'+dl+'</b><span>'+esc(daysW(dl))+' '+esc(T('days_left'))+'</span></div><div class="muted small">'+esc(T('until'))+' '+esc(dateS(s.expire_ts))+'</div>';}
-    else if(s.expire_at)h+='<div class="h2" style="margin-top:10px">'+esc(T('until'))+' '+esc(s.expire_at)+'</div>';
+    else if(s.expire_at)h+='<div class="h2" style="margin-top:10px">'+(s.perpetual?'':esc(T('until'))+' ')+esc(s.expire_at)+'</div>';
     var meta='';
     if(s.plan_title)meta+='<span>'+esc(T('plan_cur'))+': <b>'+esc(s.plan_title)+'</b></span>';
     if(s.devices_ok)meta+='<span>'+esc(T('devices'))+': <b>'+esc(s.has_limit?(s.devices_used+' / '+s.device_limit):String(s.devices_used))+'</b></span>';
@@ -725,8 +734,9 @@ function apBlock(){
 function homeList(){
   var m=STATE.menu||{},s=STATE.sub||{},h='<div class="list">';
   if(STATE.plans.length)h+=item(IC.bolt,T('plans'),'','','openPlans()');
-  h+=item(IC.wallet,T('wallet'),'',rub(STATE.balanceK),'go(\'wallet\')');
+  if(!m.perpetual)h+=item(IC.wallet,T('wallet'),'',rub(STATE.balanceK),'go(\'wallet\')');
   if(m.referral_on)h+=item(IC.gift,T('ref'),'','','go(\'ref\')');
+  if(m.user_invites)h+=item(IC.gift,T('ref'),'','','go(\'uinv\')');
   h+=item(IC.tag,T('promo'),'','','go(\'promo\')');
   if(s.active)h+=item(IC.device,T('devices_title'),'',s.devices_ok?(s.has_limit?(s.devices_used+' / '+s.device_limit):String(s.devices_used)):'','go(\'devices\')');
   h+='</div><div class="list">';
@@ -1116,6 +1126,55 @@ function shareRef(link,tgLink){
   var u='https://t.me/share/url?url='+encodeURIComponent(link)+'&text='+encodeURIComponent(T('ref_share_text'));openSmart(u);
 }
 
+/* ---------- «Пригласить друга»: Приглашения от пользователей ---------- */
+// a.d — экран, уже полученный ответом на создание или отзыв.
+SCREENS.uinv=async function(a){
+  a=a||{};CUR.arg=a;
+  if(!a.d){view(backBtn()+'<div class="sk" style="height:260px"></div>');
+    try{a.d=await api('/api/miniapp/invites');}catch(e){if(e.denied){renderDenied(e.message);return;}a.d={error:e.message||T('loading_fail')};}
+    if(!CUR||CUR.arg!==a)return;}
+  var d=a.d,h=backBtn()+'<div class="h1" style="margin-top:8px">'+esc(T('ref'))+'</div><div class="hint">'+esc(T('uinv_lead'))+'</div>';
+  if(!d.allowed){view(h+'<div class="card empty">'+esc(d.error||T('uinv_off'))+'</div>');return;}
+  var b=d.bonus,val=function(kind,v){return kind==='days'?(v+' '+T('days_short')):(v+' ₽');};
+  if(b){
+    h+='<div class="list"><div class="kv"><span class="k">'+esc(T('ref_you'))+'</span><span class="v">'+esc(val(b.bonus_kind,b.bonus_value))+' <span class="muted small" style="font-weight:500">'+esc(b.on_first_pay?T('ref_first'):T('ref_reg'))+'</span></span></div>';
+    if(b.invitee_value>0&&b.invitee_kind)h+='<div class="kv"><span class="k">'+esc(T('ref_friend'))+'</span><span class="v">'+esc(val(b.invitee_kind,b.invitee_value))+'</span></div>';
+    if(b.percent>0)h+='<div class="kv"><span class="k">'+esc(T('ref_pct'))+'</span><span class="v">'+b.percent+'%</span></div>';
+    h+='<div class="kv"><span class="k">'+esc(T('ref_count'))+'</span><span class="v">'+(b.count||0)+'</span></div><div class="kv"><span class="k">'+esc(T('ref_earned'))+'</span><span class="v">'+esc(rub(b.earned_kopecks||0))+'</span></div></div>';
+  }
+  h+='<div class="sect">'+esc(T('uinv_list'))+'</div><div class="hint" style="margin:0 4px">'+esc(T('uinv_rules',d.ttl_days||0,d.active||0,d.max_active||0))+'</div>';
+  // Кнопки ссылаются на Приглашение по номеру: текст для копирования
+  // многострочный и в атрибут onclick не встаёт.
+  (d.invites||[]).forEach(function(x,i){
+    var ref='CUR.arg.d.invites['+i+']';
+    h+='<div class="card"><div class="link" style="margin-top:0" onclick="copy('+ref+'.share_text)"><code>'+esc(x.link||x.cabinet_link||x.code)+'</code>'+IC.copy+'</div>'+
+      '<div class="hint">'+esc(T('uinv_until',x.expire_at))+'</div><div class="row2" style="margin-top:12px">';
+    // В Telegram — выбор чата с готовым текстом; в браузере его нет, и
+    // копируется тот же текст со ссылками.
+    if(!WEB&&x.share_url)h+='<button class="btn" onclick="openSmart('+ref+'.share_url)">'+IC.send+esc(T('share'))+'</button>';
+    else h+='<button class="btn" onclick="copy('+ref+'.share_text)">'+IC.copy+esc(T('copy'))+'</button>';
+    h+='<button class="btn sec" onclick="uinvAct(\'revoke\','+ref+'.code,this)">'+esc(T('uinv_revoke'))+'</button></div></div>';
+  });
+  if((d.active||0)<(d.max_active||0))h+='<button class="btn" style="margin-top:12px" onclick="uinvAct(\'new\',\'\',this)">'+IC.plus+esc(T('uinv_new'))+'</button>';
+  view(h);
+};
+async function uinvAct(kind,code,el){
+  busy(el,true);
+  try{var d=await post('/api/miniapp/invites/'+kind,kind==='revoke'?{code:code}:{});
+    if(d.error&&!d.ok)toast(d.error,'err');else if(d.message)toast(d.message,'ok');
+    if(CUR&&CUR.name==='uinv'){CUR.arg={d:d};SCREENS.uinv(CUR.arg);}
+  }catch(e){busy(el,false);if(e.denied){renderDenied(e.message);return;}toast(e.message||T('error'),'err');}
+}
+// Экран отказа Закрытого входа: человек без Доступа видит, что нужно
+// приглашение, а не «Не удалось загрузить».
+function renderDenied(msg){
+  STACK=[];CUR={name:'denied'};STATE.me=null;paintBalance();
+  var h='<div class="narrow">'+brandHTML(true)+'<div class="h1 center" style="margin-top:'+(BRAND.logo?'8':'28')+'px">'+esc(T('denied_title'))+'</div>'+
+    '<div class="card"><div class="hint center" style="margin-top:0">'+esc(msg||T('denied_text'))+'</div></div>';
+  if(WEB)h+='<button class="btn sec" style="margin-top:12px" onclick="logout()">'+IC.user+esc(T('denied_other'))+'</button>';
+  view(h+'</div>');
+}
+
 /* ---------- устройства ---------- */
 SCREENS.devices=function(){
   if(DESK){devicesDesk();return;}
@@ -1383,7 +1442,7 @@ async function renderLogin(){
 window.onTGAuth=function(u){
   var body=Object.assign({},u);var st=serverStart(load('cab_start'));if(st)body.start=st;
   view('<div class="sk" style="height:200px"></div>');
-  post('/api/cabinet/auth/telegram',body).then(function(r){if(r&&r.token){TOKEN=r.token;store('cab_tok',r.token);boot();}else{toast(T('login_fail'),'err');renderLogin();}}).catch(function(e){toast(e.message||T('login_fail'),'err');renderLogin();});
+  post('/api/cabinet/auth/telegram',body).then(function(r){if(r&&r.token){TOKEN=r.token;store('cab_tok',r.token);boot();}else{toast(T('login_fail'),'err');renderLogin();}}).catch(function(e){if(e.denied){renderDenied(e.message);return;}toast(e.message||T('login_fail'),'err');renderLogin();});
 };
 async function cabAuth(kind,el){
   var e=document.getElementById('le'),p=document.getElementById('lp');var em=e?e.value.trim():'',pw=p?p.value:'';
@@ -1479,6 +1538,7 @@ async function boot(){
     goHome();NOFX=false;
   }catch(e){
     if(WEB&&e.status===401){store('cab_tok',null);TOKEN=null;NOFX=true;renderLogin();return;}
+    if(e.denied){renderDenied(e.message);return;}
     view('<div class="card empty">'+esc(T('loading_fail'))+': '+esc(e.message)+'<button class="btn sec" style="margin-top:14px" onclick="boot()">'+IC.refresh+'</button></div>');
   }
 }

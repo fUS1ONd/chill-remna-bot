@@ -146,12 +146,19 @@ func plainName(s string) string {
 const subCacheTTL = 30
 
 func (a *App) userHasSub(ctx context.Context, chatID int64) bool {
+	has, _, _ := a.subCached(ctx, chatID)
+	return has
+}
 
+// subCached — есть ли у человека подписка в панели и её срок окончания, с
+// кэшем на subCacheTTL. known=false — панель не ответила ни разу (или её нет):
+// тогда has=false, а срок неизвестен.
+func (a *App) subCached(ctx context.Context, chatID int64) (has bool, expire string, known bool) {
 	a.subMu.Lock()
 	if a.subCache != nil {
 		if e, ok := a.subCache[chatID]; ok && time.Now().Before(e.expireAt) {
 			a.subMu.Unlock()
-			return e.has
+			return e.has, e.subExpire, true
 		}
 	}
 	a.subMu.Unlock()
@@ -160,32 +167,31 @@ func (a *App) userHasSub(ctx context.Context, chatID int64) bool {
 	panel := a.panel
 	a.mu.Unlock()
 	if panel == nil {
-		return false
+		return false, "", false
 	}
-	_, _, _, has, err := panel.SubscriptionState(ctx, chatID)
+	_, exp, _, has, err := panel.SubscriptionState(ctx, chatID)
 	if err != nil {
 		// Панель молчит — это НЕ «подписки нет». Отрицательный ответ при
 		// аварии кэшировался на полминуты и переживал возвращение панели:
 		// платящий клиент полминуты видел «у вас нет подписок, купите».
 		// Отдаём последнее известное значение и ничего не запоминаем.
 		a.subMu.Lock()
-		last := false
+		defer a.subMu.Unlock()
 		if a.subCache != nil {
 			if e, ok := a.subCache[chatID]; ok {
-				last = e.has
+				return e.has, e.subExpire, true
 			}
 		}
-		a.subMu.Unlock()
-		return last
+		return false, "", false
 	}
 
 	a.subMu.Lock()
 	if a.subCache == nil {
 		a.subCache = map[int64]subCacheEntry{}
 	}
-	a.subCache[chatID] = subCacheEntry{has: has, expireAt: time.Now().Add(subCacheTTL * time.Second)}
+	a.subCache[chatID] = subCacheEntry{has: has, subExpire: exp, expireAt: time.Now().Add(subCacheTTL * time.Second)}
 	a.subMu.Unlock()
-	return has
+	return has, exp, true
 }
 
 func (a *App) invalidateSubCache(chatID int64) {
@@ -199,6 +205,11 @@ func (a *App) invalidateSubCache(chatID int64) {
 func (a *App) navRow(ctx context.Context, chatID int64) []models.InlineKeyboardButton {
 	lang := a.lang(chatID)
 	var row []models.InlineKeyboardButton
+	// Бессрочную не покупают и не продлевают, а кошелёк ей не нужен: на него
+	// приходят только реферальные начисления, а их бессрочному нет.
+	if a.subPerpetual(ctx, chatID) {
+		return append(row, btn(i18n.T(lang, "btn.mysubs"), "menu:mysubs"))
+	}
 	if a.userHasSub(ctx, chatID) {
 		row = append(row, btn(i18n.T(lang, "btn.mysubs"), "menu:mysubs"))
 		if a.renewEligible(ctx, chatID) {
@@ -215,7 +226,7 @@ func (a *App) navRow(ctx context.Context, chatID int64) []models.InlineKeyboardB
 }
 
 func (a *App) renewEligible(ctx context.Context, chatID int64) bool {
-	if a.store == nil {
+	if a.store == nil || a.subPerpetual(ctx, chatID) {
 		return false
 	}
 	u, _ := a.store.GetUser(ctx, chatID)
@@ -554,7 +565,10 @@ func bannerInputFor(section string) models.InputFile {
 	return &models.InputFileUpload{Filename: "welcome.jpg", Data: bytes.NewReader(defaultBanner)}
 }
 
-func (a *App) welcomeContent(name string) (models.InputFile, string, []models.MessageEntity) {
+// welcomeContent — баннер и подпись главного меню. perpetual — у человека
+// Бессрочная: стандартное приветствие зовёт выбрать тариф и оплатить, ему
+// нечего покупать. Свой текст из «🖼 Баннер» показывается всем.
+func (a *App) welcomeContent(name string, perpetual bool) (models.InputFile, string, []models.MessageEntity) {
 	a.mu.Lock()
 	var w model.WelcomeConfig
 	lang := i18n.Fallback
@@ -579,7 +593,11 @@ func (a *App) welcomeContent(name string) (models.InputFile, string, []models.Me
 	caption := w.Text
 	var ents []models.MessageEntity
 	if caption == "" {
-		caption = i18n.T(lang, "menu.welcome", name)
+		key := "menu.welcome"
+		if perpetual {
+			key = "menu.welcome_perpetual"
+		}
+		caption = i18n.T(lang, key, name)
 	} else if len(w.Entities) > 0 {
 		_ = json.Unmarshal(w.Entities, &ents)
 	}
@@ -596,7 +614,7 @@ func (a *App) showMenu(ctx context.Context, chatID int64, isAdmin bool, name str
 		return
 	}
 	lang := a.botLang()
-	photo, caption, ents := a.welcomeContent(name)
+	photo, caption, ents := a.welcomeContent(name, !isAdmin && a.subPerpetual(ctx, chatID))
 	var rows [][]models.InlineKeyboardButton
 	if isAdmin {
 		caption = i18n.T(lang, "menu.admin_title")
@@ -608,7 +626,14 @@ func (a *App) showMenu(ctx context.Context, chatID int64, isAdmin bool, name str
 		if row := a.miniAppButtonRow(lang); row != nil {
 			rows = append(rows, row)
 		}
-		if a.referralCfg().Enabled {
+		// С Приглашениями от пользователей «Пригласить друга» заменяет
+		// рефералку: ref_-ссылка в этом режиме не показывается.
+		switch {
+		case a.canInviteFriends(ctx, chatID):
+			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.user_invites"), "menu:"+cbUserInvite)})
+		case a.userInvitesOn():
+			// Тумблер включён, а права нет: ни Приглашений, ни ref_.
+		case a.referralCfg().Enabled:
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.referral"), "menu:ref")})
 		}
 		if row := a.legalMenuRow(lang); row != nil {
@@ -634,7 +659,7 @@ func (a *App) registerUser(ctx context.Context, chatID int64, firstName, usernam
 	if a.syncPanelAccount(ctx, chatID) {
 		if u, _ := a.store.GetUser(ctx, chatID); u != nil && u.SubExpireAt != "" {
 			lang := a.lang(chatID)
-			a.notify(ctx, chatID, i18n.T(lang, "sync.linked", formatExpire(u.SubExpireAt, lang)))
+			a.notify(ctx, chatID, i18n.T(lang, "sync.linked", formatSubExpire(u.SubExpireAt, lang)))
 		}
 	}
 	// Согласие при первом входе: новичок — как раз тот, кому документы и
@@ -670,7 +695,13 @@ func (a *App) onMenu(ctx context.Context, chatID int64, val string, isAdmin bool
 	case "balance":
 		a.showBalance(ctx, chatID)
 	case "ref":
+		if a.userInvitesOn() {
+			a.showUserInvites(ctx, chatID, "")
+			return
+		}
 		a.showReferral(ctx, chatID)
+	case cbUserInvite:
+		a.showUserInvites(ctx, chatID, "")
 	case "refadmin":
 		if isAdmin {
 			a.showReferralAdmin(ctx, chatID)

@@ -112,11 +112,20 @@ func (a *App) askCloseMode(ctx context.Context, chatID int64, mode string) {
 
 // accessGranted сообщает, есть ли у пользователя персональный доступ: он в
 // белом списке (в т.ч. после активации приглашения) или добавлен по ID заранее.
+//
+// Аккаунт кабинета по почте (отрицательный синтетический id) получает Доступ
+// Приглашением или одобрением владельца в модерации кабинета (WebApproved);
+// отказ владельца (WebDenied) перекрывает и то и другое — иначе отозванный
+// доступ действовал бы до истечения выданного пропуска.
 func (a *App) accessGranted(ctx context.Context, chatID int64) bool {
 	if a.store == nil {
 		return true
 	}
-	if u, _ := a.store.GetUser(ctx, chatID); u != nil && u.Whitelisted {
+	u, _ := a.store.GetUser(ctx, chatID)
+	if chatID < 0 {
+		return u != nil && !u.WebDenied && (u.Whitelisted || u.WebApproved)
+	}
+	if u != nil && u.Whitelisted {
 		return true
 	}
 	ok, _ := a.store.IsWhitelistID(ctx, chatID)
@@ -137,17 +146,8 @@ func (a *App) MiniAccessDenied(ctx context.Context, tgID int64) bool {
 	if a.store == nil {
 		return false
 	}
-	// E-mail-аккаунты кабинета (отрицательный синтетический id) вайтлистом
-	// Telegram-ID не описываются: их допуском заведует модерация кабинета.
-	// В закрытом боте пускаем тех, кого админ одобрил (WebApproved) — как и
-	// до апгрейда; остальных заворачиваем, CabinetGate отправит их в обычную
-	// очередь на одобрение.
-	if tgID < 0 {
-		u, _ := a.store.GetUser(ctx, tgID)
-		// Отказ учитывается наравне с отсутствием одобрения — иначе отозванный
-		// доступ действовал бы до истечения выданного пропуска.
-		return u == nil || u.WebDenied || !u.WebApproved
-	}
+	// Аккаунт кабинета по почте без Доступа здесь получает отказ, а не
+	// очередь: в очередь на одобрение его ставит CabinetGate на входе.
 	return !a.accessGranted(ctx, tgID)
 }
 
@@ -176,8 +176,10 @@ func (a *App) inviteLink(ctx context.Context, code string) string {
 }
 
 // redeemInvite активирует приглашение по коду из /start. Возвращает текст для
-// пользователя (пустой — если делать нечего) и признак успеха.
-func (a *App) redeemInvite(ctx context.Context, chatID int64, code string) (string, bool) {
+// пользователя (пустой — если делать нечего) и признак успеха. username и
+// firstName записываются новичку сразу после создания строки, чтобы
+// уведомления об активации назвали его по имени.
+func (a *App) redeemInvite(ctx context.Context, chatID int64, code, username, firstName string) (string, bool) {
 	lang := a.lang(chatID)
 	code = strings.ToLower(strings.TrimSpace(code))
 	if a.store == nil || code == "" {
@@ -193,33 +195,98 @@ func (a *App) redeemInvite(ctx context.Context, chatID int64, code string) (stri
 		// открывала бы вход в закрытый бот.
 		return "", false
 	}
+	// Два кода одним человеком подряд: второй видит уже выданный Доступ и не
+	// тратится.
+	lk := &a.redeemLk[extLockIndex(strconv.FormatInt(chatID, 10))]
+	lk.Lock()
+	defer lk.Unlock()
 	// Забаненный не должен сжигать активацию чужого приглашения.
 	if a.userBlocked(ctx, chatID) {
 		return "", false
 	}
+	// Почтовый аккаунт, отклонённый владельцем, Доступа не получит и по
+	// Приглашению (отказ перекрывает его, см. accessGranted): тратить чужую
+	// активацию и слать Автору «пришёл» незачем.
+	if chatID < 0 {
+		if u, _ := a.store.GetUser(ctx, chatID); u != nil && u.WebDenied {
+			return "", false
+		}
+	}
+	inv, err := a.store.GetInvite(ctx, code)
 	if a.accessGranted(ctx, chatID) {
-		// Доступ уже есть — приглашение не тратим.
-		return "", true
+		// Доступ уже есть — обычное приглашение не тратим. Безлимит-приглашение
+		// тратится и повышает до Бессрочной, если её ещё нет.
+		if err != nil || !inv.Perpetual() || a.subPerpetual(ctx, chatID) {
+			return "", true
+		}
+		if ok, uerr := a.store.UseInvite(ctx, code, chatID, false); uerr != nil || !ok {
+			if uerr != nil {
+				a.log.Warn("invite: активация", "code", code, "err", uerr)
+			}
+			return i18n.T(lang, "inv.bad"), true
+		}
+		return a.grantPerpetualByInvite(ctx, chatID, code), true
+	}
+	author := int64(0)
+	if inv != nil {
+		author = inv.CreatedBy
+	}
+	// Отказ по Приглашению от пользователя (и по неизвестному коду, пока
+	// приглашают пользователи) зовёт к другу, а не к администратору.
+	bad := "inv.bad"
+	if author != 0 || (inv == nil && a.userInvitesOn()) {
+		bad = "uinv.bad"
+	}
+	if err != nil {
+		a.log.Warn("invite: чтение", "code", code, "err", err)
+		return i18n.T(lang, bad), false
+	}
+	// Пауза: тумблер выключен, Автор заблокирован или лишён Доступа.
+	if author != 0 && !a.canInviteFriends(ctx, author) {
+		return i18n.T(lang, bad), false
 	}
 	ok, err := a.store.UseInvite(ctx, code, chatID, false)
 	if err != nil {
 		a.log.Warn("invite: активация", "code", code, "err", err)
-		return i18n.T(lang, "inv.bad"), false
+		return i18n.T(lang, bad), false
 	}
 	if !ok {
-		return i18n.T(lang, "inv.bad"), false
+		return i18n.T(lang, bad), false
+	}
+	// Автор становится Пригласившим через логику рефералки, как при
+	// ref_<Автор>. Строго ДО UpsertUser: bindReferrer привязывает только
+	// новичка без строки в базе.
+	// Аккаунту по почте разовые бонусы — только после его оплаты, как при
+	// ref_ по ссылке на кабинет: адреса заводятся бесплатно.
+	if author != 0 {
+		a.bindReferrer(ctx, chatID, refPayload(author), chatID < 0)
 	}
 	_ = a.store.UpsertUser(ctx, chatID)
+	a.rememberUser(ctx, chatID, username, firstName)
 	if err := a.store.SetWhitelisted(ctx, chatID, true); err != nil {
 		// Активация уже списана, но доступа нет — честно говорим об этом и
 		// зовём в поддержку, а не рисуем «добро пожаловать».
 		a.log.Error("invite: выдача доступа", "tg_id", chatID, "err", err)
 		return i18n.T(lang, "inv.grant_failed"), false
 	}
-	a.log.Info("invite: доступ выдан", "tg_id", chatID, "code", code)
-	alang := a.lang(a.cfg.AdminID)
-	a.notify(ctx, a.cfg.AdminID, i18n.T(alang, "inv.used_admin", code, a.userLabelByID(ctx, chatID)))
+	a.log.Info("invite: доступ выдан", "tg_id", chatID, "code", code, "author", author)
+	if inv.Perpetual() {
+		return a.grantPerpetualByInvite(ctx, chatID, code), true
+	}
+	if author != 0 {
+		a.notifyUserInviteUsed(ctx, author, chatID)
+	} else {
+		alang := a.lang(a.cfg.AdminID)
+		a.notify(ctx, a.cfg.AdminID, i18n.T(alang, "inv.used_admin", code, a.userLabelByID(ctx, chatID)))
+	}
 	return i18n.T(lang, "inv.ok"), true
+}
+
+// inviteParam — код Приглашения из параметра ссылки inv_<код> (/start в чате,
+// старт мини-аппа, ссылка на кабинет).
+func inviteParam(param string) (string, bool) {
+	code, ok := strings.CutPrefix(strings.TrimSpace(param), "inv_")
+	return code, ok && code != ""
 }
 
 // markOpenInvite — открытый бот: приглашение ничего не выдаёт, только
@@ -266,6 +333,19 @@ func (a *App) showAccess(ctx context.Context, chatID int64) {
 		{pick(model.AccessInvite, "access.btn_invite")},
 		{pick(model.AccessWhitelist, "access.btn_whitelist")},
 	}
+	if mode == model.AccessInvite {
+		mark := "❌"
+		if a.userInvitesToggle() {
+			mark = "✅"
+		}
+		rows = append(rows,
+			[]models.InlineKeyboardButton{btn(i18n.T(lang, "access.btn_user_invites", mark), "acc:uinv")},
+			[]models.InlineKeyboardButton{btn(i18n.T(lang, "access.btn_user_invite_list"), "acc:ulist")},
+			// Безлимит-приглашение — только в закрытом режиме: в открытом
+			// приглашение ничего не выдаёт.
+			[]models.InlineKeyboardButton{btn(i18n.T(lang, "inv.btn_new_perpetual"), "acc:newp")},
+		)
+	}
 	if mode != model.AccessWhitelist {
 		rows = append(rows, []models.InlineKeyboardButton{
 			btn(i18n.T(lang, "inv.btn_new"), "acc:new"),
@@ -284,12 +364,13 @@ func (a *App) showAccess(ctx context.Context, chatID int64) {
 	a.sendKBSection(ctx, chatID, assets.SectionReferral, text, rows)
 }
 
-// inviteStats — сколько приглашений сейчас действует и сколько всего.
+// inviteStats — сколько приглашений владельца сейчас действует и сколько
+// всего; Приглашения пользователей считаются в своём списке.
 func (a *App) inviteStats(ctx context.Context) (active, total int) {
 	if a.store == nil {
 		return 0, 0
 	}
-	list, err := a.store.ListInvites(ctx)
+	list, err := a.store.ListInvitesBy(ctx, 0)
 	if err != nil {
 		return 0, 0
 	}
@@ -305,13 +386,14 @@ func (a *App) inviteStats(ctx context.Context) (active, total int) {
 // invitesPageSize — сколько приглашений показываем на одной странице.
 const invitesPageSize = 10
 
-// showInvites — список приглашений с состоянием и кнопками отзыва/удаления.
+// showInvites — список приглашений владельца с состоянием и кнопками
+// отзыва/удаления. Приглашения пользователей — в showOwnerUserInvites.
 func (a *App) showInvites(ctx context.Context, chatID int64, page int) {
 	lang := a.lang(chatID)
 	if a.store == nil {
 		return
 	}
-	list, err := a.store.ListInvites(ctx)
+	list, err := a.store.ListInvitesBy(ctx, 0)
 	if err != nil {
 		a.sendHome(ctx, chatID, "❌ "+err.Error())
 		return
@@ -351,6 +433,9 @@ func (a *App) showInvites(ctx context.Context, chatID int64, page int) {
 			uses += "/∞"
 		}
 		label := state + " " + inv.Code + " · " + uses
+		if inv.Perpetual() {
+			label = state + " ♾ " + inv.Code + " · " + uses
+		}
 		if inv.ExpiresAt != "" {
 			label += " · " + shortDate(inv.ExpiresAt)
 		}
@@ -401,7 +486,20 @@ func (a *App) showInvite(ctx context.Context, chatID int64, code string) {
 	case !inv.Active(time.Now().UTC()):
 		state = i18n.T(lang, "inv.state_done")
 	}
-	text := i18n.T(lang, "inv.card", state, link, uses, exp) + "\n\n" + i18n.T(lang, "inv.card_hint_"+a.accessMode())
+	text := i18n.T(lang, "inv.card", state, link, uses, exp)
+	if inv.Perpetual() {
+		text += "\n" + i18n.T(lang, "inv.card_perpetual")
+	}
+	// Приглашение пользователя: вместо подсказки владельцу — Автор; удалить
+	// нельзя (пропали бы записи, кто по нему пришёл, и счётчики), только отозвать.
+	userInv := inv.FromUser()
+	back := "acc:list"
+	if userInv {
+		text += "\n" + i18n.T(lang, "inv.card_author", a.userLabelByID(ctx, inv.CreatedBy))
+		back = "acc:ulist"
+	} else {
+		text += "\n\n" + i18n.T(lang, "inv.card_hint_"+a.accessMode())
+	}
 	rows := [][]models.InlineKeyboardButton{}
 	if _, joined, err := a.store.InviteUses(ctx, inv.Code, 0, 0); err == nil && (joined > 0 || inv.Used > 0) {
 		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "inv.btn_who", joined), "acc:who:"+inv.Code+":0")})
@@ -409,9 +507,11 @@ func (a *App) showInvite(ctx context.Context, chatID int64, code string) {
 	if !inv.Revoked {
 		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "inv.btn_revoke"), "acc:revoke:"+inv.Code)})
 	}
+	if !userInv {
+		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "inv.btn_del"), "acc:del:"+inv.Code)})
+	}
 	rows = append(rows,
-		[]models.InlineKeyboardButton{btn(i18n.T(lang, "inv.btn_del"), "acc:del:"+inv.Code)},
-		[]models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), "acc:list"), btn(i18n.T(lang, "btn.home"), "menu:home")},
+		[]models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), back), btn(i18n.T(lang, "btn.home"), "menu:home")},
 	)
 	a.sendKBSection(ctx, chatID, assets.SectionReferral, text, rows)
 }
@@ -509,17 +609,36 @@ func (a *App) onAccess(ctx context.Context, chatID int64, val string) {
 			}
 		}
 		a.showAccess(ctx, chatID)
-	case "new":
-		a.getUI(chatID).adminInput = "inv_days"
+	case "uinv":
+		a.toggleUserInvites(ctx)
+		a.showAccess(ctx, chatID)
+	case "new", "newp":
+		ui := a.getUI(chatID)
+		ui.inviteGrant = model.InviteGrantAccess
+		if action == "newp" {
+			ui.inviteGrant = model.InviteGrantPerpetual
+		}
+		ui.adminInput = "inv_days"
 		a.askInput(ctx, chatID, i18n.T(lang, "inv.ask_days"), "menu:access")
 	case "list":
 		a.showInvites(ctx, chatID, 0)
 	case "page":
 		p, _ := strconv.Atoi(arg)
 		a.showInvites(ctx, chatID, p)
+	case "ulist":
+		a.showOwnerUserInvites(ctx, chatID, 0)
+	case "upage":
+		p, _ := strconv.Atoi(arg)
+		a.showOwnerUserInvites(ctx, chatID, p)
 	case "revoke":
 		if a.store != nil && arg != "" {
+			// Отзыв Приглашения пользователя возвращает в их список.
+			inv, _ := a.store.GetInvite(ctx, arg)
 			_ = a.store.RevokeInvite(ctx, arg)
+			if inv != nil && inv.FromUser() {
+				a.showOwnerUserInvites(ctx, chatID, 0)
+				return
+			}
 		}
 		a.showInvites(ctx, chatID, 0)
 	case "del":
@@ -555,12 +674,12 @@ func (a *App) createInviteUses(ctx context.Context, chatID int64, text string) {
 		return
 	}
 	ui := a.getUI(chatID)
-	days := ui.inviteDays
-	ui.inviteDays = 0
+	days, grant := ui.inviteDays, ui.inviteGrant
+	ui.inviteDays, ui.inviteGrant = 0, ""
 	if a.store == nil {
 		return
 	}
-	inv := &model.Invite{Code: newInviteCode(), MaxUses: uses}
+	inv := &model.Invite{Code: newInviteCode(), MaxUses: uses, Grant: grant}
 	if days > 0 {
 		inv.ExpiresAt = time.Now().UTC().AddDate(0, 0, days).Format(time.RFC3339)
 	}

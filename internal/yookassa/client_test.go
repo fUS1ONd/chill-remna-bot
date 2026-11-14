@@ -1,12 +1,15 @@
 package yookassa
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCreateAndGetPayment(t *testing.T) {
@@ -137,5 +140,47 @@ func TestAPIErrorClassification(t *testing.T) {
 	}
 	if (&APIError{Status: 400, Description: "invalid currency"}).Error() != "ЮKassa HTTP 400: invalid currency" {
 		t.Error("текст ошибки с описанием")
+	}
+}
+
+// Момент списания разбирается из ответа API: им датируется чек самозанятого.
+func TestGetPaymentCapturedAt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/pay-cap") {
+			_, _ = w.Write([]byte(`{"id":"pay-cap","status":"succeeded","paid":true,"captured_at":"2026-10-31T20:59:30.512Z"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"pay-nocap","status":"pending","paid":false}`))
+	}))
+	defer srv.Close()
+	old := BaseURL
+	BaseURL = srv.URL
+	defer func() { BaseURL = old }()
+
+	c := New("shop", "secret")
+	p, err := c.GetPayment(context.Background(), "pay-cap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 31, 20, 59, 30, 512000000, time.UTC)
+	if got := p.Captured(); !got.Equal(want) || got.Location() != time.UTC {
+		t.Fatalf("captured_at: %v, ожидалось %v", got, want)
+	}
+	p, err = c.GetPayment(context.Background(), "pay-nocap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Captured().IsZero() {
+		t.Fatalf("без captured_at момент списания должен быть нулевым: %v", p.Captured())
+	}
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(prev)
+	if !(&Payment{ID: "pay-bad", CapturedAt: "вчера"}).Captured().IsZero() {
+		t.Fatal("нечитаемый captured_at должен давать нулевое время")
+	}
+	if s := logBuf.String(); !strings.Contains(s, "level=WARN") || !strings.Contains(s, "pay-bad") {
+		t.Fatalf("нечитаемый captured_at должен уходить в лог предупреждением: %q", s)
 	}
 }

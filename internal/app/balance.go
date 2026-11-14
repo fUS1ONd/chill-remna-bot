@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-telegram/bot/models"
 
@@ -76,6 +77,9 @@ func (a *App) userBalance(ctx context.Context, chatID int64) int64 {
 }
 
 func (a *App) showBalance(ctx context.Context, chatID int64) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 	bal := a.userBalance(ctx, chatID)
 	caption := i18n.T(lang, "balance.head", kopecksToRub(bal))
@@ -250,6 +254,9 @@ func (a *App) topUpAmounts(ctx context.Context) ([]int64, int64) {
 }
 
 func (a *App) showTopUp(ctx context.Context, chatID int64) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 	if !a.topUpEnabled() {
 		a.showBalance(ctx, chatID)
@@ -275,6 +282,9 @@ func (a *App) showTopUp(ctx context.Context, chatID int64) {
 }
 
 func (a *App) onTopUp(ctx context.Context, chatID int64, val string) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	action, arg, _ := cut3(val)
 	lang := a.lang(chatID)
 	if !a.topUpEnabled() {
@@ -318,6 +328,9 @@ func (a *App) onTopUp(ctx context.Context, chatID int64, val string) {
 func (a *App) setTopUpCustom(ctx context.Context, chatID int64, text string) {
 	ui := a.getUI(chatID)
 	ui.awaitTopUp = false
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	if !a.topUpEnabled() {
 		a.showBalance(ctx, chatID)
 		return
@@ -419,6 +432,9 @@ func (a *App) showTopUpMethods(ctx context.Context, chatID int64) {
 }
 
 func (a *App) startTopUp(ctx context.Context, chatID int64, method string) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 	if !a.topUpEnabled() {
 		a.showBalance(ctx, chatID)
@@ -586,6 +602,12 @@ func (a *App) topUpCreate(ctx context.Context, chatID int64, k int64, method str
 }
 
 func (a *App) finalizeTopUp(ctx context.Context, chatID int64, kopecks int64, method, amount, extID string) error {
+	return a.finalizeTopUpAt(ctx, chatID, kopecks, method, amount, extID, time.Time{})
+}
+
+// finalizeTopUpAt — finalizeTopUp с моментом списания денег по данным
+// провайдера (см. finalizePurchaseAt).
+func (a *App) finalizeTopUpAt(ctx context.Context, chatID int64, kopecks int64, method, amount, extID string, capturedAt time.Time) error {
 	if a.store == nil {
 		return nil
 	}
@@ -612,6 +634,7 @@ func (a *App) finalizeTopUp(ctx context.Context, chatID int64, kopecks int64, me
 	// закрывала счёт.
 	if err := a.store.AddPaymentAndBalance(ctx, &model.Payment{
 		TelegramID: chatID, Method: method, Amount: amount, Status: model.PaymentPaid, ExtID: extID, Comment: "topup",
+		CapturedAt: capturedStr(capturedAt),
 	}, kopecks); err != nil {
 		if errors.Is(err, storage.ErrDuplicateExtID) {
 			a.payLog(ctx, method, extID, chatID, "duplicate", "пополнение уже зачислено")
@@ -621,10 +644,7 @@ func (a *App) finalizeTopUp(ctx context.Context, chatID int64, kopecks int64, me
 		return err
 	}
 	a.payLog(ctx, method, extID, chatID, "topup_credited", "kopecks=%d amount=%s", kopecks, amount)
-	// Чек «Мой налог» — только по платежам ЮKassa.
-	if method == model.PayMethodYooKassa {
-		a.fiscalize(float64(kopecks)/100, "Пополнение баланса")
-	}
+	a.issueReceipt(ctx, method, extID, kopecks, "Пополнение баланса", incomeAt(capturedAt))
 	if !hasChat(chatID) {
 		return nil
 	}

@@ -437,12 +437,12 @@ var DESK=false;
 function setDesk(){DESK=!!(DESKMQ&&DESKMQ.matches);try{document.body.classList.toggle('desk',DESK);}catch(e){}}
 setDesk();
 if(DESKMQ){var onDeskMQ=function(){var was=DESK;setDesk();if(was===DESK||!TOKEN||!STATE.menu)return;
-  var re={plans:openPlans,wallet:openMore,connect:openConnect,account:openAccount}[PAGE];if(re)re();else boot();};
+  var re={plans:openPlans,wallet:openMore,invites:function(){openInvites();},connect:openConnect,account:openAccount}[PAGE];if(re)re();else boot();};
   try{if(DESKMQ.addEventListener)DESKMQ.addEventListener('change',onDeskMQ);else if(DESKMQ.addListener)DESKMQ.addListener(onDeskMQ);}catch(e){}}
 // PAGE — раздел меню, к которому относится открытый экран; null — меню нет
 // (вход, восстановление пароля, согласие с документами на входе).
 var PAGE=null;
-var PAGE_TITLES={home:'Главная',plans:'Тарифы',wallet:'Кошелёк',connect:'Подключение',account:'Аккаунт'};
+var PAGE_TITLES={home:'Главная',plans:'Тарифы',wallet:'Кошелёк',invites:'Пригласить друга',connect:'Подключение',account:'Аккаунт'};
 
 /* ---- TG init + premium chrome ---- */
 if(tg){
@@ -492,7 +492,11 @@ function renderSide(){
   var h='<div class="sbrand"><span class="lg">'+IC.bolt+'</span>Личный кабинет</div>';
   h+=item('home',IC.layers,'Главная','boot()');
   if((STATE.plans&&STATE.plans.length)||STATE.plansNotice)h+=item('plans',IC.tag,'Тарифы','openPlans()');
-  h+=item('wallet',IC.wallet,'Кошелёк','openMore()',esc(rub(STATE.balanceK))+' ₽');
+  // Бессрочному кошелёк не нужен: начислять на него нечего, платить не за что.
+  // Экран тот же, но на нём остаётся только «Пригласить друга».
+  if(!m.perpetual)h+=item('wallet',IC.wallet,'Кошелёк','openMore()',esc(rub(STATE.balanceK))+' ₽');
+  else if(m.referral_on)h+=item('wallet',IC.gift,'Пригласить друга','openMore()');
+  if(m.user_invites)h+=item('invites',IC.gift,'Пригласить друга','openInvites()');
   if(sub.sub_url)h+=item('connect',IC.download,'Подключение','openConnect()');
   h+=item('account',IC.users,'Аккаунт','openAccount()');
   if(m.support_url||m.group_url){
@@ -540,9 +544,14 @@ function rub(k){return (Math.round(k)/100).toLocaleString('ru-RU');}
 async function authenticate(){
   if(!tg||!tg.initData)throw new Error('Откройте через Telegram');
   const a=await api('/api/miniapp/auth',{method:'POST',body:JSON.stringify({init_data:tg.initData}),noRetry:true});
-  TOKEN=a.token;return TOKEN;
+  TOKEN=a.token;
+  // Итог Приглашения из start_param («доступ открыт», «недействительно»).
+  if(a.notice&&!STATE.noticeShown){STATE.noticeShown=true;setTimeout(function(){toast(a.notice);},400);}
+  return TOKEN;
 }
-function mkErr(status,msg){var e=new Error(msg||('http '+status));e.status=status;return e;}
+function mkErr(status,msg,denied){var e=new Error(msg||('http '+status));e.status=status;e.denied=!!denied;return e;}
+// Ошибка ответа: текст и признак отказа Закрытого входа (access_denied).
+async function apiErr(r){var em=null,den=false;try{var j=await r.json();if(j&&j.error)em=j.error;den=!!(j&&j.access_denied);}catch(e){}return mkErr(r.status,em,den);}
 async function api(path,opts={}){
   const h=Object.assign({'Content-Type':'application/json'},opts.headers||{});
   if(TOKEN)h['Authorization']='Bearer '+TOKEN;
@@ -552,10 +561,10 @@ async function api(path,opts={}){
     const h2=Object.assign({'Content-Type':'application/json'},opts.headers||{});
     h2['Authorization']='Bearer '+TOKEN;
     const r2=await fetch(path,Object.assign({},opts,{headers:h2}));
-    if(!r2.ok)throw mkErr(r2.status,null);
+    if(!r2.ok)throw await apiErr(r2);
     return r2.json();
   }
-  if(!r.ok){var em=null;try{var j=await r.json();if(j&&j.error)em=j.error;}catch(e){}throw mkErr(r.status,em);}
+  if(!r.ok)throw await apiErr(r);
   return r.json();
 }
 async function post(path,body){return api(path,{method:'POST',body:JSON.stringify(body||{})});}
@@ -652,7 +661,7 @@ function passHTML(sub){
       '<div class="pl"><span class="brand">'+(sub.plan_title?'ТАРИФ · '+esc(String(sub.plan_title).toUpperCase()):'ДОСТУП · BOARDING')+'</span>'+(dead?'<span class="pstat '+dead.c+'"><span class="dot off"></span>'+dead.t+'</span>':'<span class="pstat"><span class="dot"></span>активно</span>')+'</div>'+
       '<div class="route"><span class="pt">Ты</span><span class="ln"></span><span class="pic">'+IC.plane+'</span><span class="ln"></span><span class="pt">Сеть</span></div></div>'+
       '<div class="perf"></div><div class="stub'+(dleft!==null&&dtext!==null&&atext!==null?' n4':'')+'">'+
-        '<div class="c"><div class="k">ДО</div><div class="v">'+esc(dshort)+'</div></div>'+
+        '<div class="c"><div class="k">'+(sub.perpetual?'СРОК':'ДО')+'</div><div class="v">'+esc(dshort)+'</div></div>'+
         (dleft!==null?'<div class="c"><div class="k">ОСТАЛОСЬ</div><div class="v">'+dleft+' '+daysWord(dleft)+'</div></div>':'')+
         (dtext!==null?'<div class="c"><div class="k">УСТРОЙСТВА</div><div class="v">'+esc(dtext)+'</div></div>':'')+
         (atext!==null?'<div class="c"><div class="k">'+esc((sub.addsub_name||'Доп-сервер').toUpperCase())+'</div><div class="v">'+esc(atext)+'</div></div>':'')+
@@ -711,6 +720,7 @@ function render(me,menu,sub,plans){
   if(menu.support_url)acts+='<button class="btn sec" onclick="openSmart(\''+jsq(menu.support_url)+'\')">'+IC.life+'Поддержка</button>';
   if(menu.group_url)acts+='<button class="btn sec" onclick="openSmart(\''+jsq(menu.group_url)+'\')">'+IC.users+'Наша группа</button>';
   if(menu.referral_on)acts+='<button class="btn sec" onclick="openMore()">'+IC.gift+'Пригласить друга</button>';
+  if(menu.user_invites)acts+='<button class="btn sec" onclick="openInvites()">'+IC.gift+'Пригласить друга</button>';
   acts+='<button class="btn ghost" onclick="openMore()">'+IC.dots+'Ещё</button>';
   h+='<div class="btnrow">'+acts+'</div>';
   h+='</div>';
@@ -1165,7 +1175,9 @@ async function openMore(){
   haptic('tap');skSimple();setBack(boot);
   var ref={enabled:false};
   try{ref=await api('/api/miniapp/referral');}catch(e){}
-  var h='<div class="stagger"><div class="card hero glow"><div class="top"><span class="status">'+IC.wallet+' Баланс</span></div>'+
+  var h='<div class="stagger">';
+  // Бессрочному баланс не показываем: кошелька у него нет.
+  if(!(STATE.menu&&STATE.menu.perpetual))h+='<div class="card hero glow"><div class="top"><span class="status">'+IC.wallet+' Баланс</span></div>'+
     '<div class="title">'+rub(STATE.balanceK)+' ₽</div>'+
     (topupOn()?'<button class="btn" style="margin-top:14px" onclick="topupOpen()">'+IC.plus+'Пополнить баланс</button>':'')+
     '<div class="hint" style="margin-top:12px">Баланс тратится только на подписку. Вывод средств невозможен.</div></div>';
@@ -1177,7 +1189,7 @@ async function openMore(){
     h+='<div class="sec-title">'+IC.gift+'Пригласить друга</div><div class="card">';
     var cond=ref.on_first_pay?' за первую оплату друга':' за регистрацию друга';
     h+='<div class="hint">Тебе: <b style="color:var(--text)">'+esc(bonus)+'</b>'+cond+'.';
-    if(ref.invitee_value>0&&ref.invitee_kind){var ib=(ref.invitee_kind==='days')?(ref.invitee_value+' дн.'):(ref.invitee_value+' ₽');h+=' Другу — подарок <b style="color:var(--text)">'+esc(ib)+'</b>.';}
+    if(ref.invitee_value>0&&ref.invitee_kind){var ib=(ref.invitee_kind==='days')?(ref.invitee_value+' дн.'):(ref.invitee_value+' ₽');h+=' Другу — подарок <b style="color:var(--text)">'+esc(ib)+'</b>'+(/\.$/.test(ib)?'':'.');}
     if(ref.percent>0)h+=' И ещё <b style="color:var(--text)">'+ref.percent+'%</b> с каждой его оплаты.';
     h+='</div>';
     h+='<div style="display:flex;justify-content:space-between;margin-top:12px;font-size:13.5px"><span style="color:var(--muted)">Приглашено</span><b>'+(ref.count||0)+'</b></div>';
@@ -1201,6 +1213,69 @@ async function openMore(){
   if(WEB)h+='<button class="btn sec deskhide" style="margin-top:10px" onclick="cabLogout()">'+IC.help+'Выйти</button>';
   h+='<button class="btn ghost back" style="margin-top:'+(WEB?'10px':'16px')+'" onclick="boot()">← Назад</button></div>';
   view(h,boot);
+}
+/* ---- «Пригласить друга»: Приглашения от пользователей ---- */
+// d — экран, уже полученный ответом на создание или отзыв.
+async function openInvites(d){
+  PAGE='invites';
+  if(!d){
+    haptic('tap');skSimple();setBack(boot);
+    try{d=await api('/api/miniapp/invites');}
+    catch(e){if(e.denied){renderDenied(e.message);return;}view('<div class="card err">Не удалось загрузить: '+esc(e.message)+'</div>',boot);return;}
+  }
+  var h='<div class="stagger"><div class="card hero glow"><div class="top"><span class="status">'+IC.gift+' Пригласить друга</span></div>'+
+    '<div class="hint" style="margin-top:8px">Бот закрытый: друг войдёт только по вашему приглашению.</div></div>';
+  if(!d.allowed){
+    h+='<div class="card"><div class="hint center">'+esc(d.error||'Приглашать друзей сейчас нельзя.')+'</div></div>';
+  }else{
+    var b=d.bonus;
+    if(b){
+      var bonus=(b.bonus_kind==='days')?(b.bonus_value+' дн.'):(b.bonus_value+' ₽');
+      h+='<div class="card"><div class="hint">Тебе: <b style="color:var(--text)">'+esc(bonus)+'</b>'+(b.on_first_pay?' за первую оплату друга':' за регистрацию друга')+'.';
+      if(b.invitee_value>0&&b.invitee_kind){var ib=(b.invitee_kind==='days')?(b.invitee_value+' дн.'):(b.invitee_value+' ₽');h+=' Другу — подарок <b style="color:var(--text)">'+esc(ib)+'</b>'+(/\.$/.test(ib)?'':'.');}
+      if(b.percent>0)h+=' И ещё <b style="color:var(--text)">'+b.percent+'%</b> с каждой его оплаты.';
+      h+='</div><div style="display:flex;justify-content:space-between;margin-top:12px;font-size:13.5px"><span style="color:var(--muted)">Приглашено</span><b>'+(b.count||0)+'</b></div>'+
+        '<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:13.5px"><span style="color:var(--muted)">Заработано</span><b>'+rub(b.earned_kopecks||0)+' ₽</b></div></div>';
+    }
+    h+='<div class="sec-title">'+IC.users+'Приглашения</div>'+
+      '<div class="hint">Приглашение одноразовое и действует '+(d.ttl_days||0)+' дней. Активных: <b style="color:var(--text)">'+(d.active||0)+'</b> из '+(d.max_active||0)+'.</div>';
+    // Приглашения хранятся в STATE, кнопки ссылаются на них по номеру:
+    // текст для копирования многострочный и в атрибут onclick не встаёт.
+    STATE.invites=d.invites||[];
+    STATE.invites.forEach(function(x,i){
+      h+='<div class="card" style="margin-top:10px"><div class="mono">'+esc(x.link||x.cabinet_link||x.code)+'</div>'+
+        '<div class="hint" style="margin-top:8px">Действует до '+esc(x.expire_at)+'</div>';
+      // В Telegram — выбор чата с готовым текстом, в браузере его нет:
+      // копируется тот же текст со ссылками.
+      if(!WEB&&x.share_url)h+='<button class="btn" style="margin-top:10px" onclick="openSmart(STATE.invites['+i+'].share_url)">'+IC.users+'Поделиться</button>';
+      else h+='<button class="btn" style="margin-top:10px" onclick="copy(STATE.invites['+i+'].share_text)">'+IC.copy+'Скопировать</button>';
+      h+='<button class="btn sec" style="margin-top:8px" onclick="inviteRevoke(STATE.invites['+i+'].code,this)">🚫 Отозвать</button></div>';
+    });
+    if((d.active||0)<(d.max_active||0))h+='<button class="btn" style="margin-top:12px" onclick="inviteNew(this)">'+IC.plus+'Создать приглашение</button>';
+  }
+  h+='<button class="btn ghost back" style="margin-top:16px" onclick="boot()">← Назад</button></div>';
+  view(h,boot);
+}
+async function inviteAct(path,body,el){
+  haptic('tap');busy(el,true);
+  try{var d=await post(path,body);
+    if(d.error&&!d.ok){haptic('err');toast(d.error,'err');}else if(d.message){haptic('ok');toast(d.message,'ok');}
+    openInvites(d);
+  }catch(e){busy(el,false);if(e.denied){renderDenied(e.message);return;}haptic('err');toast('Ошибка: '+e.message,'err');}
+}
+function inviteNew(el){inviteAct('/api/miniapp/invites/new',{},el);}
+function inviteRevoke(code,el){inviteAct('/api/miniapp/invites/revoke',{code:code},el);}
+// Экран отказа Закрытого входа: человек без Доступа видит, что нужно
+// приглашение, а не «Не удалось загрузить».
+function renderDenied(msg){
+  PAGE=null;
+  balchip.style.display='none';balchip.innerHTML='';
+  var h='<div class="stagger"><div class="card hero glow"><div class="top"><span class="status">'+IC.gift+' Приглашение</span></div>'+
+    '<div class="title">Бот закрытый</div>'+
+    '<div class="hint" style="margin-top:8px">'+esc(msg||'Войти можно только по приглашению от друга.')+'</div></div>';
+  if(WEB)h+='<button class="btn sec" style="margin-top:12px" onclick="cabLogout()">'+IC.login+'Войти другим аккаунтом</button>';
+  h+='</div>';
+  view(h,null);
 }
 // stay — не уходить на главную после применения (ссылка ведёт дальше, к тарифу).
 async function promoApply(el,given,stay){
@@ -1648,7 +1723,7 @@ async function renderLogin(){
   view(h,null);
   if(cfg.client_id||cfg.bot_username){TG_CFG=cfg;mountTGWidget('tglogin','onTGAuth','Войти через Telegram');}
 }
-window.onTGAuth=function(user){renderLoginBusy();var body=Object.assign({},user);var st=serverStart(lsGet('cab_start'));if(st)body.start=st;post('/api/cabinet/auth/telegram',body).then(function(r){if(r&&r.token){TOKEN=r.token;setStoredToken(r.token);boot();}else{toast('Не удалось войти','err');renderLogin();}}).catch(function(e){toast(e.message||'Ошибка входа','err');renderLogin();});};
+window.onTGAuth=function(user){renderLoginBusy();var body=Object.assign({},user);var st=serverStart(lsGet('cab_start'));if(st)body.start=st;post('/api/cabinet/auth/telegram',body).then(function(r){if(r&&r.token){TOKEN=r.token;setStoredToken(r.token);boot();}else{toast('Не удалось войти','err');renderLogin();}}).catch(function(e){if(e.denied){renderDenied(e.message);return;}toast(e.message||'Ошибка входа','err');renderLogin();});};
 function renderLoginBusy(){skSimple();}
 async function cabEmail(path,el){
   var email=cabVal('lemail'),pass=cabVal('lpass');
@@ -1734,8 +1809,8 @@ async function boot(){
     if(WEB){try{STATE.acct=await api('/api/cabinet/account');}catch(e){STATE.acct=null;}}
     STATE.me_id=me.tg_id||0;loadAva();
     STATE.balanceK=me.balance_kopecks||0; STATE.methods=menu.pay_methods||[]; STATE.menu=menu; STATE.lang=me.lang||'ru'; STATE.me_name=me.name||''; STATE.me_email=me.email||''; STATE.me_subexp=me.sub_expire||'';
-    balchip.style.display='inline-flex';
-    balchip.innerHTML=IC.wallet+rub(STATE.balanceK)+' ₽';
+    balchip.style.display=menu.perpetual?'none':'inline-flex';
+    balchip.innerHTML=menu.perpetual?'':IC.wallet+rub(STATE.balanceK)+' ₽';
     NOFX=true;render(me,menu,sub,plans);NOFX=false;
     // Ссылка ждёт согласия с документами на входе: после «Принимаю» boot()
     // вызовется снова. В кабинете она до тех пор лежит в localStorage и
@@ -1748,7 +1823,7 @@ async function boot(){
       var ps=WEB?start:STATE.pendingStart;STATE.pendingStart='';
       if(ps)await handleStart(ps);
     }
-  }catch(e){if(WEB&&e.status===401){clearToken();NOFX=true;renderLogin();return;}if(!STATE.menu)PAGE=null;view('<div class="card err">Не удалось загрузить: '+esc(e.message)+'</div>',null);}
+  }catch(e){if(WEB&&e.status===401){clearToken();NOFX=true;renderLogin();return;}if(e.denied){renderDenied(e.message);return;}if(!STATE.menu)PAGE=null;view('<div class="card err">Не удалось загрузить: '+esc(e.message)+'</div>',null);}
 }
 boot();
 </script>

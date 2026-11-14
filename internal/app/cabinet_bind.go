@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"remnabot/internal/i18n"
-
+	"remnabot/internal/model"
 	"remnabot/internal/remnawave"
 )
 
@@ -74,11 +74,28 @@ func (a *App) CabinetBindTelegram(ctx context.Context, tgID, newTgID int64) (int
 	}
 	// Закрытый бот (приглашения/вайтлист): привязка к Telegram, которого бот не
 	// пускает, заперла бы человека снаружи вместе с его оплаченной подпиской.
-	if a.MiniAccessDenied(ctx, newTgID) {
+	// Доступ почтового аккаунта (Приглашение, одобрение владельца) переезжает
+	// вместе с ним, и такому аккаунту Доступ Telegram не нужен.
+	hadAccess := a.accessMode() != model.AccessPublic && a.accessGranted(ctx, tgID)
+	if !hadAccess && a.MiniAccessDenied(ctx, newTgID) {
 		return 0, errBindDenied
 	}
 	if u, _ := a.store.GetUser(ctx, newTgID); u != nil && u.Blocked {
 		return 0, errBindDenied
+	}
+
+	// На телеграмном идентификаторе Доступ держит только флаг Whitelisted:
+	// одобрение модерации кабинета (WebApproved) Telegram-аккаунту Доступа
+	// не даёт. Флаг ставится ДО переноса, на строку почтового аккаунта, и
+	// переезжает вместе с ней: упавшая запись после переноса оставила бы
+	// человека снаружи уже с привязанным Telegram.
+	if hadAccess {
+		if u, _ := a.store.GetUser(ctx, tgID); u != nil && !u.Whitelisted {
+			if err := a.store.SetWhitelisted(ctx, tgID, true); err != nil {
+				a.log.Warn("привязка Telegram: Доступ не сохранён", "err", err)
+				return 0, errors.New("не удалось привязать Telegram, попробуйте позже")
+			}
+		}
 	}
 
 	fp, err := a.store.AccountFootprint(ctx, newTgID)

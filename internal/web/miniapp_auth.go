@@ -97,6 +97,23 @@ func initDataStartParam(initData string) string {
 	return p
 }
 
+// initDataUserName — @username и имя из поля user данных запуска. Вызывать
+// только после успешной validateInitData.
+func initDataUserName(initData string) (username, firstName string) {
+	vals, err := url.ParseQuery(initData)
+	if err != nil {
+		return "", ""
+	}
+	var u struct {
+		Username  string `json:"username"`
+		FirstName string `json:"first_name"`
+	}
+	if json.Unmarshal([]byte(vals.Get("user")), &u) != nil {
+		return "", ""
+	}
+	return u.Username, u.FirstName
+}
+
 func hmacSHA256(key, msg []byte) []byte {
 	m := hmac.New(sha256.New, key)
 	m.Write(msg)

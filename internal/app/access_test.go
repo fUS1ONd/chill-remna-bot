@@ -25,14 +25,14 @@ func TestAccessInvite_RedeemGrantsAccess(t *testing.T) {
 	if err := fs.CreateInvite(ctx, inv); err != nil {
 		t.Fatalf("создание приглашения: %v", err)
 	}
-	if msg, ok := a.redeemInvite(ctx, 500, "abc123"); !ok || msg == "" {
+	if msg, ok := a.redeemInvite(ctx, 500, "abc123", "", ""); !ok || msg == "" {
 		t.Fatalf("активация приглашения: ok=%v msg=%q", ok, msg)
 	}
 	if a.denyAccess(ctx, 500, false) {
 		t.Fatal("после активации приглашения доступ должен быть")
 	}
 	// Лимит исчерпан — второй пользователь не пройдёт.
-	if _, ok := a.redeemInvite(ctx, 501, "abc123"); ok {
+	if _, ok := a.redeemInvite(ctx, 501, "abc123", "", ""); ok {
 		t.Fatal("приглашение на 1 активацию не должно срабатывать дважды")
 	}
 	if !a.denyAccess(ctx, 501, false) {
@@ -47,13 +47,13 @@ func TestAccessInvite_ExpiredAndRevoked(t *testing.T) {
 
 	past := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
 	_ = fs.CreateInvite(ctx, &model.Invite{Code: "old", MaxUses: 0, ExpiresAt: past})
-	if _, ok := a.redeemInvite(ctx, 600, "old"); ok {
+	if _, ok := a.redeemInvite(ctx, 600, "old", "", ""); ok {
 		t.Fatal("просроченное приглашение не должно активироваться")
 	}
 
 	_ = fs.CreateInvite(ctx, &model.Invite{Code: "rev", MaxUses: 5})
 	_ = fs.RevokeInvite(ctx, "rev")
-	if _, ok := a.redeemInvite(ctx, 601, "rev"); ok {
+	if _, ok := a.redeemInvite(ctx, 601, "rev", "", ""); ok {
 		t.Fatal("отозванное приглашение не должно активироваться")
 	}
 }
@@ -66,7 +66,7 @@ func TestAccessInvite_Unlimited(t *testing.T) {
 	_ = fs.CreateInvite(ctx, &model.Invite{Code: "many", MaxUses: 0})
 
 	for _, id := range []int64{700, 701, 702} {
-		if _, ok := a.redeemInvite(ctx, id, "many"); !ok {
+		if _, ok := a.redeemInvite(ctx, id, "many", "", ""); !ok {
 			t.Fatalf("многоразовое приглашение должно срабатывать для %d", id)
 		}
 		if a.denyAccess(ctx, id, false) {
@@ -204,7 +204,7 @@ func TestInvite_ModeAndBlocked(t *testing.T) {
 	a.setAccessMode(ctx, model.AccessWhitelist, false)
 	_ = fs.CreateInvite(ctx, &model.Invite{Code: "old1", MaxUses: 1})
 
-	if _, ok := a.redeemInvite(ctx, 920, "old1"); ok {
+	if _, ok := a.redeemInvite(ctx, 920, "old1", "", ""); ok {
 		t.Fatal("в режиме вайтлиста старое приглашение работать не должно")
 	}
 	if a.accessGranted(ctx, 920) {
@@ -214,14 +214,14 @@ func TestInvite_ModeAndBlocked(t *testing.T) {
 	a.setAccessMode(ctx, model.AccessInvite, false)
 	_ = fs.UpsertUser(ctx, 921)
 	_ = fs.SetBlocked(ctx, 921, true)
-	if _, ok := a.redeemInvite(ctx, 921, "old1"); ok {
+	if _, ok := a.redeemInvite(ctx, 921, "old1", "", ""); ok {
 		t.Fatal("забаненный не должен активировать приглашение")
 	}
 	if inv, _ := fs.GetInvite(ctx, "old1"); inv.Used != 0 {
 		t.Fatalf("активация не должна тратиться забаненным: used=%d", inv.Used)
 	}
 	// Код в другом регистре и с пробелами всё равно принимается.
-	if _, ok := a.redeemInvite(ctx, 922, " OLD1 "); !ok {
+	if _, ok := a.redeemInvite(ctx, 922, " OLD1 ", "", ""); !ok {
 		t.Fatal("код должен нормализоваться (регистр/пробелы)")
 	}
 }

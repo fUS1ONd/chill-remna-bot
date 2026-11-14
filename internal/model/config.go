@@ -75,6 +75,37 @@ type Invite struct {
 	CreatedAt string
 	Revoked   bool
 	Note      string
+	// CreatedBy — Автор приглашения: 0 — владелец, иначе Telegram ID
+	// пользователя (Приглашение от пользователя).
+	CreatedBy int64
+	// Grant — что выдаёт активация; пусто при записи — InviteGrantAccess.
+	Grant string
+}
+
+// FromUser — Автор приглашения пользователь, а не владелец.
+func (i *Invite) FromUser() bool { return i.CreatedBy != 0 }
+
+// Что выдаёт активация приглашения (invites.grant_kind).
+const (
+	// InviteGrantAccess — приглашение выдаёт только Доступ.
+	InviteGrantAccess = "access"
+	// InviteGrantPerpetual — Безлимит-приглашение: Доступ и Бессрочная
+	// подписка. Создаёт только владелец.
+	InviteGrantPerpetual = "perpetual"
+)
+
+// Perpetual — Безлимит-приглашение. Приглашение от пользователя им не бывает,
+// что бы ни лежало в базе.
+func (i *Invite) Perpetual() bool {
+	return i != nil && i.CreatedBy == 0 && i.Grant == InviteGrantPerpetual
+}
+
+// UserInviteStats — счётчики Приглашений пользователей для владельца:
+// создано, активировано и сколько из активировавших оплатили.
+type UserInviteStats struct {
+	Created   int
+	Activated int
+	Paid      int
 }
 
 // InviteUse — человек, пришедший по приглашению.
@@ -156,6 +187,11 @@ type BotConfig struct {
 	Reminders RemindersConfig `json:"reminders"`
 	Referral  ReferralConfig  `json:"referral"`
 	MoyNalog  MoyNalogConfig  `json:"moynalog"`
+
+	// UserInvites — тумблер «Приглашают пользователи»: в режиме «По
+	// приглашениям» любой с Доступом создаёт Приглашения для друзей. В других
+	// режимах не действует.
+	UserInvites bool `json:"user_invites,omitempty"`
 
 	// WhitelistMode — legacy-флаг «вайтлист включён». Оставлен ради обратной
 	// совместимости со старыми конфигами и старым UI; актуальное состояние
@@ -629,6 +665,9 @@ type Payment struct {
 	Comment    string
 	ExtID      string
 	CreatedAt  string
+	// CapturedAt — момент списания денег по данным провайдера (RFC3339, UTC);
+	// "" — провайдер его не сообщает. Им датируется чек «Мой налог».
+	CapturedAt string
 
 	// Snapshot — условия, на которых платёж был проведён (см. PlanSnapshot).
 	Snapshot *PlanSnapshot

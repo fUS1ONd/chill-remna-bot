@@ -44,18 +44,30 @@ func (a *App) denyAccess(ctx context.Context, chatID int64, isAdmin bool) bool {
 	// список» — только тех, кому доступ уже выдан (приглашение выдаёт тот же
 	// флаг, поэтому смена режима никого не выкидывает).
 	switch a.accessMode() {
-	case model.AccessInvite:
+	case model.AccessInvite, model.AccessWhitelist:
 		if a.store != nil && !a.accessGranted(ctx, chatID) {
-			a.send(ctx, chatID, i18n.T(a.lang(chatID), "user.need_invite"))
-			return true
-		}
-	case model.AccessWhitelist:
-		if a.store != nil && !a.accessGranted(ctx, chatID) {
-			a.send(ctx, chatID, i18n.T(a.lang(chatID), "user.not_whitelisted"))
+			a.send(ctx, chatID, i18n.T(a.lang(chatID), a.denyTextKey()))
 			return true
 		}
 	}
 	return false
+}
+
+// denyTextKey — ключ текста отказа человеку без Доступа в текущем режиме.
+func (a *App) denyTextKey() string {
+	switch {
+	case a.accessMode() == model.AccessWhitelist:
+		return "user.not_whitelisted"
+	case a.userInvitesOn():
+		return "uinv.need_invite"
+	}
+	return "user.need_invite"
+}
+
+// MiniDenyText — текст отказа для экрана отказа мини-аппа и кабинета: тот же,
+// что в чате, без разметки.
+func (a *App) MiniDenyText(_ context.Context, tgID int64) string {
+	return stripHTMLTags(i18n.T(a.lang(tgID), a.denyTextKey()))
 }
 
 func (a *App) showUsers(ctx context.Context, chatID int64, page int) {
@@ -437,10 +449,14 @@ func (a *App) showUser(ctx context.Context, chatID, uid int64) {
 		if url, exp, st, ok := panel.SubscriptionFull(ctx, uid); ok {
 			subExists = true
 			subBlocked = st == remnawave.StatusDisabled
-			if subBlocked {
+			switch {
+			case subBlocked:
 				subBlock = i18n.T(lang, "user.sub_blocked", a.rewriteSub(url))
-			} else {
-				subBlock = i18n.T(lang, "user.sub_active", formatExpire(exp, lang), a.rewriteSub(url))
+			case perpetualExpiry(exp):
+				// «активна до Бессрочная» не по-русски: у бессрочной своя строка.
+				subBlock = i18n.T(lang, "user.sub_perpetual", a.rewriteSub(url))
+			default:
+				subBlock = i18n.T(lang, "user.sub_active", formatSubExpire(exp, lang), a.rewriteSub(url))
 			}
 		}
 	}
@@ -460,6 +476,8 @@ func (a *App) showUser(ctx context.Context, chatID, uid int64) {
 			torLine = "\n" + i18n.T(lang, "user.torrents", torCount, last30)
 		}
 	}
+
+	invLine, invRows := a.userInviteBlock(ctx, lang, u)
 
 	var actions []models.InlineKeyboardButton
 	if !botBlocked || (subExists && !subBlocked) {
@@ -484,6 +502,7 @@ func (a *App) showUser(ctx context.Context, chatID, uid int64) {
 			btn(i18n.T(lang, "btn.user_plans"), "usr:plans:"+id),
 		})
 	}
+	rows = append(rows, invRows...)
 	rows = append(rows,
 		[]models.InlineKeyboardButton{btn(i18n.T(lang, "btn.delete"), "usr:del:"+id)},
 		[]models.InlineKeyboardButton{
@@ -494,7 +513,9 @@ func (a *App) showUser(ctx context.Context, chatID, uid int64) {
 		// оттуда: иначе найденный человек стоил бы нового поиска.
 		[]models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), backToUserList(a.getUI(chatID))), btn(i18n.T(lang, "btn.home"), "menu:home")},
 	)
-	a.sendUsrKB(ctx, chatID, i18n.T(lang, "user.card", a.userLabelFor(ctx, u), created, p2p, status, subBlock)+torLine, rows)
+	// Пригласивший и Приглашения — сведения о человеке: под подпиской, выше
+	// служебной подсказки про «Удалить», которой заканчивается user.card.
+	a.sendUsrKB(ctx, chatID, i18n.T(lang, "user.card", a.userLabelFor(ctx, u), created, p2p, status, subBlock+invLine)+torLine, rows)
 }
 
 // clientPlanTitle — тариф текущей подписки для экранов клиента (чат,
@@ -604,6 +625,18 @@ func (a *App) onUsers(ctx context.Context, chatID int64, val string, srcMsgID in
 		a.showUsers(ctx, chatID, page)
 	case "view":
 		uid, _ := strconv.ParseInt(arg, 10, 64)
+		a.showUser(ctx, chatID, uid)
+	case "refs":
+		uidStr, p, _ := strings.Cut(arg, ":")
+		uid, _ := strconv.ParseInt(uidStr, 10, 64)
+		page, _ := strconv.Atoi(p)
+		a.showReferrals(ctx, chatID, uid, page)
+	case "urev":
+		uidStr, code, _ := strings.Cut(arg, ":")
+		uid, _ := strconv.ParseInt(uidStr, 10, 64)
+		if a.store != nil {
+			a.revokeUserInviteOf(ctx, uid, code)
+		}
 		a.showUser(ctx, chatID, uid)
 	case "block":
 		lang := a.lang(chatID)
@@ -1152,7 +1185,9 @@ func (a *App) showMySubs(ctx context.Context, chatID int64) {
 	// пытаясь починить, и теряли настроенные клиенты. Кнопки «Продлить» на
 	// этом экране не было вообще ни при каком статусе.
 	if key := subDeadKey(status, expireAt); key != "" {
-		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.renew"), "menu:renew")})
+		if !perpetualExpiry(expireAt) {
+			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.renew"), "menu:renew")})
+		}
 		if row := a.autoPayRow(ctx, chatID, lang); row != nil {
 			rows = append(rows, row)
 		}
@@ -1182,6 +1217,9 @@ func (a *App) showMySubs(ctx context.Context, chatID int64) {
 // off, the user has no add-on, or the panel can't be read — the screen then
 // looks exactly as before.
 func (a *App) addSubLine(ctx context.Context, chatID int64) string {
+	if a.subPerpetual(ctx, chatID) {
+		return ""
+	}
 	info, ok := a.addSubStatus(ctx, chatID)
 	if !ok {
 		return ""

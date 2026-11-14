@@ -19,6 +19,8 @@ concurrency:
 
 jobs:
   deploy:
+    # Сайт документации публикует только автор; в форке не запускается.
+    if: github.repository_owner == 'Mrvibecodic'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

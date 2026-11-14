@@ -365,7 +365,7 @@ func (a *App) trialAvailable(ctx context.Context, chatID int64) bool {
 	a.mu.Lock()
 	enabled := a.botCfg != nil && a.botCfg.Trial.Enabled && a.botCfg.Trial.Days > 0
 	a.mu.Unlock()
-	if !enabled || a.store == nil {
+	if !enabled || a.store == nil || a.subPerpetual(ctx, chatID) {
 		return false
 	}
 	u, _ := a.store.GetUser(ctx, chatID)
@@ -376,16 +376,19 @@ func (a *App) trialAvailable(ctx context.Context, chatID int64) bool {
 }
 
 func (a *App) activateTrial(ctx context.Context, chatID int64) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 	if a.syncPanelAccount(ctx, chatID) {
 		if u, _ := a.store.GetUser(ctx, chatID); u != nil && u.SubExpireAt != "" {
-			a.notify(ctx, chatID, i18n.T(lang, "sync.linked", formatExpire(u.SubExpireAt, lang)))
+			a.notify(ctx, chatID, i18n.T(lang, "sync.linked", formatSubExpire(u.SubExpireAt, lang)))
 		}
 	}
 	link, expireAt, ok, err := a.trialOnce(ctx, chatID)
 	if !ok {
 		if expireAt != "" {
-			a.sendHome(ctx, chatID, i18n.T(lang, "sync.linked", formatExpire(expireAt, lang)))
+			a.sendHome(ctx, chatID, i18n.T(lang, "sync.linked", formatSubExpire(expireAt, lang)))
 			return
 		}
 		a.sendHome(ctx, chatID, i18n.T(lang, "trial.not_available"))
