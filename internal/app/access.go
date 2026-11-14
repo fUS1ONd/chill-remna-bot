@@ -204,11 +204,21 @@ func (a *App) redeemInvite(ctx context.Context, chatID int64, code, username, fi
 	if a.userBlocked(ctx, chatID) {
 		return "", false
 	}
-	if a.accessGranted(ctx, chatID) {
-		// Доступ уже есть — приглашение не тратим.
-		return "", true
-	}
 	inv, err := a.store.GetInvite(ctx, code)
+	if a.accessGranted(ctx, chatID) {
+		// Доступ уже есть — обычное приглашение не тратим. Безлимит-приглашение
+		// тратится и повышает до Бессрочной, если её ещё нет.
+		if err != nil || !inv.Perpetual() || a.subPerpetual(ctx, chatID) {
+			return "", true
+		}
+		if ok, uerr := a.store.UseInvite(ctx, code, chatID, false); uerr != nil || !ok {
+			if uerr != nil {
+				a.log.Warn("invite: активация", "code", code, "err", uerr)
+			}
+			return i18n.T(lang, "inv.bad"), true
+		}
+		return a.finishPerpetualInvite(ctx, chatID, code), true
+	}
 	author := int64(0)
 	if inv != nil {
 		author = inv.CreatedBy
@@ -252,6 +262,9 @@ func (a *App) redeemInvite(ctx context.Context, chatID int64, code, username, fi
 		return i18n.T(lang, "inv.grant_failed"), false
 	}
 	a.log.Info("invite: доступ выдан", "tg_id", chatID, "code", code, "author", author)
+	if inv.Perpetual() {
+		return a.finishPerpetualInvite(ctx, chatID, code), true
+	}
 	if author != 0 {
 		a.notifyUserInviteUsed(ctx, author, chatID)
 	} else {
@@ -320,6 +333,9 @@ func (a *App) showAccess(ctx context.Context, chatID int64) {
 		rows = append(rows,
 			[]models.InlineKeyboardButton{btn(i18n.T(lang, "access.btn_user_invites", mark), "acc:uinv")},
 			[]models.InlineKeyboardButton{btn(i18n.T(lang, "access.btn_user_invite_list"), "acc:ulist")},
+			// Безлимит-приглашение — только в закрытом режиме: в открытом
+			// приглашение ничего не выдаёт.
+			[]models.InlineKeyboardButton{btn(i18n.T(lang, "inv.btn_new_perpetual"), "acc:newp")},
 		)
 	}
 	if mode != model.AccessWhitelist {
@@ -409,6 +425,9 @@ func (a *App) showInvites(ctx context.Context, chatID int64, page int) {
 			uses += "/∞"
 		}
 		label := state + " " + inv.Code + " · " + uses
+		if inv.Perpetual() {
+			label = state + " ♾ " + inv.Code + " · " + uses
+		}
 		if inv.ExpiresAt != "" {
 			label += " · " + shortDate(inv.ExpiresAt)
 		}
@@ -460,6 +479,9 @@ func (a *App) showInvite(ctx context.Context, chatID int64, code string) {
 		state = i18n.T(lang, "inv.state_done")
 	}
 	text := i18n.T(lang, "inv.card", state, link, uses, exp)
+	if inv.Perpetual() {
+		text += "\n" + i18n.T(lang, "inv.card_perpetual")
+	}
 	// Приглашение пользователя: вместо подсказки владельцу — Автор; удалить
 	// нельзя (пропали бы записи, кто по нему пришёл, и счётчики), только отозвать.
 	userInv := inv.FromUser()
@@ -582,8 +604,10 @@ func (a *App) onAccess(ctx context.Context, chatID int64, val string) {
 	case "uinv":
 		a.toggleUserInvites(ctx)
 		a.showAccess(ctx, chatID)
-	case "new":
-		a.getUI(chatID).adminInput = "inv_days"
+	case "new", "newp":
+		ui := a.getUI(chatID)
+		ui.invitePerpetual = action == "newp"
+		ui.adminInput = "inv_days"
 		a.askInput(ctx, chatID, i18n.T(lang, "inv.ask_days"), "menu:access")
 	case "list":
 		a.showInvites(ctx, chatID, 0)
@@ -639,12 +663,12 @@ func (a *App) createInviteUses(ctx context.Context, chatID int64, text string) {
 		return
 	}
 	ui := a.getUI(chatID)
-	days := ui.inviteDays
-	ui.inviteDays = 0
+	days, perpetual := ui.inviteDays, ui.invitePerpetual
+	ui.inviteDays, ui.invitePerpetual = 0, false
 	if a.store == nil {
 		return
 	}
-	inv := &model.Invite{Code: newInviteCode(), MaxUses: uses}
+	inv := &model.Invite{Code: newInviteCode(), MaxUses: uses, Grant: inviteGrant(perpetual)}
 	if days > 0 {
 		inv.ExpiresAt = time.Now().UTC().AddDate(0, 0, days).Format(time.RFC3339)
 	}

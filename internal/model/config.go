@@ -85,8 +85,20 @@ type Invite struct {
 // FromUser — Автор приглашения пользователь, а не владелец.
 func (i *Invite) FromUser() bool { return i.CreatedBy != 0 }
 
-// InviteGrantAccess — приглашение выдаёт только Доступ.
-const InviteGrantAccess = "access"
+// Что выдаёт активация приглашения (invites.grant_kind).
+const (
+	// InviteGrantAccess — приглашение выдаёт только Доступ.
+	InviteGrantAccess = "access"
+	// InviteGrantPerpetual — Безлимит-приглашение: Доступ и Бессрочная
+	// подписка. Создаёт только владелец.
+	InviteGrantPerpetual = "perpetual"
+)
+
+// Perpetual — Безлимит-приглашение. Приглашение от пользователя им не бывает,
+// что бы ни лежало в базе.
+func (i *Invite) Perpetual() bool {
+	return i != nil && i.CreatedBy == 0 && i.Grant == InviteGrantPerpetual
+}
 
 // UserInviteStats — счётчики Приглашений пользователей для владельца:
 // создано, активировано и сколько из активировавших оплатили.
