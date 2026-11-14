@@ -1316,6 +1316,13 @@ func (s *fakeStore) DeleteUser(_ context.Context, id int64) error {
 	return nil
 }
 
+func (s *fakeStore) DeletePayment(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pays, id)
+	return nil
+}
+
 func (s *fakeStore) DeletePaymentsByUser(_ context.Context, id int64) error {
 	for k, p := range s.pays {
 		if p.TelegramID == id {

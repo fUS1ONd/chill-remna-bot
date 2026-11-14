@@ -129,6 +129,9 @@ type Storage interface {
 	ReleasePromo(ctx context.Context, code string, telegramID int64) error
 
 	DeletePaymentsByUser(ctx context.Context, telegramID int64) error
+	// DeletePayment удаляет один платёж по id: снимает барьер идемпотентности,
+	// если подписка по записанному платежу так и не выдана.
+	DeletePayment(ctx context.Context, id int64) error
 	DeleteP2PRequestsByUser(ctx context.Context, telegramID int64) error
 
 	SetTermsAccepted(ctx context.Context, telegramID int64, ts string) error
@@ -631,6 +634,11 @@ func (b *base) DeleteUser(ctx context.Context, telegramID int64) error {
 
 func (b *base) DeletePaymentsByUser(ctx context.Context, telegramID int64) error {
 	_, err := b.db.ExecContext(ctx, "DELETE FROM payments WHERE telegram_id = "+b.ph(1), telegramID)
+	return err
+}
+
+func (b *base) DeletePayment(ctx context.Context, id int64) error {
+	_, err := b.db.ExecContext(ctx, "DELETE FROM payments WHERE id = "+b.ph(1), id)
 	return err
 }
 

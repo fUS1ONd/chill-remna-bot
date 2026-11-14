@@ -1493,13 +1493,19 @@ func (a *App) finalizePurchaseCore(ctx context.Context, telegramID int64, months
 	// конвертированный) плюс купленные месяцы. Бонусные дни сюда не входят.
 	snap.BoughtDays = boughtDaysAfter(prevSnap, prevExpire, snap, months, extraDays)
 	snap.WindowPaidK = windowPaidAfter(prevSnap, prevExpire, snap)
+	// Запись платежа — барьер идемпотентности: по ней PaymentByExtID решает,
+	// финализировать ли повторно. Поэтому она ставится ДО панели: продление,
+	// выданное без барьера, повторная доставка кассы выдала бы второй раз.
+	payID, err := a.recordPaidPayment(ctx, telegramID, months, method, amount, extID, snap, capturedAt)
+	if err != nil {
+		return "", "", nil, err
+	}
+	var link, expireAt string
 	// Снимок с явной длительностью в днях выдаётся днями, а не календарными
 	// месяцами: Tribute продаёт недельную подписку, и «месяцев × 30» превращало
 	// неделю в месяц. Остальные способы Days не ставят и идут прежней веткой.
 	// Поправка зачёта и нижняя граница «сейчас + купленное» — те же, что у
 	// продления месяцами.
-	var link, expireAt string
-	var err error
 	if snap.Days > 0 {
 		link, expireAt, err = panel.ExtendUserDays(ctx, telegramID, snap.Days, extraDays, limits, dayDealResets(prevSnap, prevExpire, snap))
 	} else {
@@ -1507,46 +1513,13 @@ func (a *App) finalizePurchaseCore(ctx context.Context, telegramID int64, months
 	}
 	if err != nil {
 		a.payLog(ctx, method, extID, telegramID, "panel_error", "%v", err)
+		a.dropUnservedPayment(ctx, method, extID, telegramID, amount, payID)
 		return "", "", nil, err
 	}
 	a.payLog(ctx, method, extID, telegramID, "panel_ok", "expire=%s", expireAt)
 	link = a.rewriteSub(link)
 	a.invalidateSubCache(telegramID)
 	if a.store != nil {
-		pay := model.Payment{
-			TelegramID: telegramID, Method: method, Months: months, Amount: amount, Status: model.PaymentPaid, ExtID: extID,
-			CapturedAt: capturedStr(capturedAt), Snapshot: snap,
-		}
-		rec := pay
-		err := a.store.AddPayment(ctx, &rec)
-		// Запись платежа — барьер идемпотентности: по ней PaymentByExtID решает,
-		// финализировать ли повторно. Транзиентный сбой (database is locked,
-		// обрыв соединения) пробуем пережить повтором.
-		for i := 0; i < 2 && err != nil && !errors.Is(err, storage.ErrDuplicateExtID); i++ {
-			time.Sleep(200 * time.Millisecond)
-			// Каждая попытка — с чистой копией: AddPayment дописывает в запись id.
-			rec = pay
-			err = a.store.AddPayment(ctx, &rec)
-		}
-		if err != nil {
-			if errors.Is(err, storage.ErrDuplicateExtID) && extID != "" {
-				a.payLog(ctx, method, extID, telegramID, "duplicate", "платёж с этим ext_id уже записан")
-				return "", "", nil, err
-			}
-			// Панель уже продлила подписку, а барьер записать не удалось. Раньше
-			// это молча глоталось — и реконсилятор, не видя платежа, продлевал бы
-			// подписку СНОВА каждые две минуты до суточного предела. Гасим pending,
-			// чтобы остановить цикл, и зовём админа сверить платёж вручную.
-			a.payLog(ctx, method, extID, telegramID, "error", "подписка выдана, но платёж не записался (идемпотентность нарушена): %v", err)
-			a.log.Error("add payment failed after retries", "err", err, "ext", extID)
-			if extID != "" {
-				if p, _ := a.store.PendingByExtID(ctx, extID); p != nil {
-					_ = a.store.ResolvePending(ctx, p.ID)
-				}
-			}
-			alang := a.lang(a.cfg.AdminID)
-			a.notify(ctx, a.cfg.AdminID, i18n.T(alang, "admin.payment_unrecorded", methodLabel(method), extID, a.userLabelByID(ctx, telegramID), amount))
-		}
 		_ = a.store.SetSubExpiry(ctx, telegramID, expireAt, "paid")
 		// Снимок действующей подписки: локальной сущности подписки у бота нет,
 		// а знать проданные условия нужно и сверке лимитов, и бонусным дням.
@@ -1559,6 +1532,59 @@ func (a *App) finalizePurchaseCore(ctx context.Context, telegramID int64, months
 	a.grantReferralBonus(ctx, telegramID)
 	a.creditReferralPercent(ctx, telegramID, amount)
 	return link, expireAt, snap, nil
+}
+
+// recordPaidPayment ставит барьер идемпотентности — запись оплаченного платежа —
+// и возвращает её id (0 — базы нет). Транзиентный сбой (database is locked,
+// обрыв соединения) пробуем пережить повтором. Дубль отдаётся как
+// ErrDuplicateExtID. Любой другой сбой останавливает финализацию до панели и до
+// чека: владелец получает алерт, а счёт остаётся висеть, чтобы повторная
+// доставка кассы или сверка прошли весь путь заново.
+func (a *App) recordPaidPayment(ctx context.Context, telegramID int64, months int, method, amount, extID string, snap *model.PlanSnapshot, capturedAt time.Time) (int64, error) {
+	if a.store == nil {
+		return 0, nil
+	}
+	pay := model.Payment{
+		TelegramID: telegramID, Method: method, Months: months, Amount: amount, Status: model.PaymentPaid, ExtID: extID,
+		CapturedAt: capturedStr(capturedAt), Snapshot: snap,
+	}
+	rec := pay
+	err := a.store.AddPayment(ctx, &rec)
+	for i := 0; i < 2 && err != nil && !errors.Is(err, storage.ErrDuplicateExtID); i++ {
+		time.Sleep(200 * time.Millisecond)
+		// Каждая попытка — с чистой копией: AddPayment дописывает в запись id.
+		rec = pay
+		err = a.store.AddPayment(ctx, &rec)
+	}
+	if err == nil {
+		return rec.ID, nil
+	}
+	if errors.Is(err, storage.ErrDuplicateExtID) {
+		a.payLog(ctx, method, extID, telegramID, "duplicate", "платёж с этим ext_id уже записан")
+		return 0, err
+	}
+	a.payLog(ctx, method, extID, telegramID, "error", "платёж не записался — подписка не выдана, ждём повторной доставки: %v", err)
+	a.log.Error("add payment failed after retries", "err", err, "ext", extID)
+	alang := a.lang(a.cfg.AdminID)
+	a.notify(ctx, a.cfg.AdminID, i18n.T(alang, "admin.payment_unrecorded", methodLabel(method), extID, a.userLabelByID(ctx, telegramID), amount))
+	return 0, fmt.Errorf("запись платежа: %w", err)
+}
+
+// dropUnservedPayment снимает барьер, если панель подписку не выдала: иначе
+// повторная доставка упёрлась бы в «уже финализирован» и деньги остались бы без
+// подписки. Не снялся — зовём владельца: повтор этот платёж уже не выдаст.
+func (a *App) dropUnservedPayment(ctx context.Context, method, extID string, telegramID int64, amount string, payID int64) {
+	if a.store == nil || payID == 0 {
+		return
+	}
+	err := a.store.DeletePayment(ctx, payID)
+	if err == nil {
+		return
+	}
+	a.payLog(ctx, method, extID, telegramID, "error", "панель не выдала подписку, а запись платежа не снялась: %v", err)
+	a.log.Error("delete unserved payment failed", "err", err, "ext", extID)
+	alang := a.lang(a.cfg.AdminID)
+	a.notify(ctx, a.cfg.AdminID, i18n.T(alang, "admin.payment_unserved", methodLabel(method), extID, a.userLabelByID(ctx, telegramID), amount))
 }
 
 func (a *App) handleAdminText(ctx context.Context, chatID int64, text string) {

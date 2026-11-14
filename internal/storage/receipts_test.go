@@ -249,3 +249,30 @@ func TestReceiptOpenAndAlerted(t *testing.T) {
 		}
 	})
 }
+
+// Снятый платёж больше не держит барьер по ext_id: тот же платёж записывается
+// заново, а соседние платежи человека не задеты.
+func TestDeletePaymentReopensBarrier(t *testing.T) {
+	eachStore(t, func(t *testing.T, st Storage) {
+		ctx := context.Background()
+		hole := &model.Payment{TelegramID: 555, Method: model.PayMethodYooKassa, Months: 1, Amount: "150.00 RUB", Status: model.PaymentPaid, ExtID: "yk-hole"}
+		other := &model.Payment{TelegramID: 555, Method: model.PayMethodYooKassa, Months: 1, Amount: "150.00 RUB", Status: model.PaymentPaid, ExtID: "yk-other"}
+		for _, p := range []*model.Payment{hole, other} {
+			if err := st.AddPayment(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := st.DeletePayment(ctx, hole.ID); err != nil {
+			t.Fatal(err)
+		}
+		if done, err := st.PaymentByExtID(ctx, "yk-hole"); err != nil || done {
+			t.Fatalf("снятый платёж всё ещё виден: done=%v err=%v", done, err)
+		}
+		if done, _ := st.PaymentByExtID(ctx, "yk-other"); !done {
+			t.Fatal("снят чужой платёж")
+		}
+		if err := st.AddPayment(ctx, &model.Payment{TelegramID: 555, Method: model.PayMethodYooKassa, Months: 1, Amount: "150.00 RUB", Status: model.PaymentPaid, ExtID: "yk-hole"}); err != nil {
+			t.Fatalf("повторная запись после снятия: %v", err)
+		}
+	})
+}
