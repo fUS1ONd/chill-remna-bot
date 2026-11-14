@@ -1189,7 +1189,7 @@ async function openMore(){
     h+='<div class="sec-title">'+IC.gift+'Пригласить друга</div><div class="card">';
     var cond=ref.on_first_pay?' за первую оплату друга':' за регистрацию друга';
     h+='<div class="hint">Тебе: <b style="color:var(--text)">'+esc(bonus)+'</b>'+cond+'.';
-    if(ref.invitee_value>0&&ref.invitee_kind){var ib=(ref.invitee_kind==='days')?(ref.invitee_value+' дн.'):(ref.invitee_value+' ₽');h+=' Другу — подарок <b style="color:var(--text)">'+esc(ib)+'</b>.';}
+    if(ref.invitee_value>0&&ref.invitee_kind){var ib=(ref.invitee_kind==='days')?(ref.invitee_value+' дн.'):(ref.invitee_value+' ₽');h+=' Другу — подарок <b style="color:var(--text)">'+esc(ib)+'</b>'+(/\.$/.test(ib)?'':'.');}
     if(ref.percent>0)h+=' И ещё <b style="color:var(--text)">'+ref.percent+'%</b> с каждой его оплаты.';
     h+='</div>';
     h+='<div style="display:flex;justify-content:space-between;margin-top:12px;font-size:13.5px"><span style="color:var(--muted)">Приглашено</span><b>'+(ref.count||0)+'</b></div>';
@@ -1232,7 +1232,7 @@ async function openInvites(d){
     if(b){
       var bonus=(b.bonus_kind==='days')?(b.bonus_value+' дн.'):(b.bonus_value+' ₽');
       h+='<div class="card"><div class="hint">Тебе: <b style="color:var(--text)">'+esc(bonus)+'</b>'+(b.on_first_pay?' за первую оплату друга':' за регистрацию друга')+'.';
-      if(b.invitee_value>0&&b.invitee_kind){var ib=(b.invitee_kind==='days')?(b.invitee_value+' дн.'):(b.invitee_value+' ₽');h+=' Другу — подарок <b style="color:var(--text)">'+esc(ib)+'</b>.';}
+      if(b.invitee_value>0&&b.invitee_kind){var ib=(b.invitee_kind==='days')?(b.invitee_value+' дн.'):(b.invitee_value+' ₽');h+=' Другу — подарок <b style="color:var(--text)">'+esc(ib)+'</b>'+(/\.$/.test(ib)?'':'.');}
       if(b.percent>0)h+=' И ещё <b style="color:var(--text)">'+b.percent+'%</b> с каждой его оплаты.';
       h+='</div><div style="display:flex;justify-content:space-between;margin-top:12px;font-size:13.5px"><span style="color:var(--muted)">Приглашено</span><b>'+(b.count||0)+'</b></div>'+
         '<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:13.5px"><span style="color:var(--muted)">Заработано</span><b>'+rub(b.earned_kopecks||0)+' ₽</b></div></div>';
