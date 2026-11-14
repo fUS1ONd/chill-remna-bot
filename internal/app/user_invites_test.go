@@ -446,3 +446,28 @@ func TestUserInvites_DenyAndNoRefLink(t *testing.T) {
 		t.Fatalf("рефералка показала ref_: %s", fm.last())
 	}
 }
+
+// Автор отзывает своё Приглашение и на паузе: выключенный тумблер не держит
+// утёкшую ссылку живой до повторного включения.
+func TestUserInvites_RevokeWhilePaused(t *testing.T) {
+	a, _, fs := uinvApp(t)
+	ctx := context.Background()
+	userInvite(t, fs, "c", uinvAuthor)
+	a.botCfg.UserInvites = false
+	a.handleCallback(ctx, cb(uinvAuthor, "uinv:revoke:c"))
+	if inv, _ := fs.GetInvite(ctx, "c"); !inv.Revoked {
+		t.Fatal("приглашение на паузе не отозвано")
+	}
+}
+
+// Рефералка выключена: друг получает Доступ, а Пригласивший не привязывается —
+// как при ref_ в chill.
+func TestUserInvites_ReferralOff(t *testing.T) {
+	a, _, fs := uinvApp(t)
+	ctx := context.Background()
+	userInvite(t, fs, "c", uinvAuthor)
+	a.handleMessage(ctx, startMsg(uinvFriend, "Друг", "inv_c"))
+	if u, _ := fs.GetUser(ctx, uinvFriend); u == nil || !u.Whitelisted || u.ReferredBy != 0 {
+		t.Fatalf("друг при выключенной рефералке: %+v", u)
+	}
+}

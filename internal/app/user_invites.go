@@ -240,7 +240,9 @@ func (a *App) onUserInvite(ctx context.Context, chatID int64, val string) {
 		a.showUserInvites(ctx, chatID, i18n.T(lang, "uinv.created"))
 	case "revoke":
 		notice := i18n.T(lang, "uinv.revoke_none")
-		if a.store != nil && arg != "" && a.canInviteFriends(ctx, chatID) {
+		// Отзыв своего не зависит от паузы: условие «своё и неиспользованное»
+		// проверяет сам запрос.
+		if a.store != nil && arg != "" {
 			ok, err := a.store.RevokeInviteBy(ctx, arg, chatID)
 			if err != nil {
 				a.log.Warn("user invite: отзыв", "tg_id", chatID, "code", arg, "err", err)

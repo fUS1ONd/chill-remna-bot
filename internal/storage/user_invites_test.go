@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -68,14 +69,49 @@ func TestRevokeUserInviteRace(t *testing.T) {
 // База на схеме v77: приглашения, созданные до миграции, становятся
 // админскими и выдают только Доступ, остальное в них не меняется.
 func TestInvitesAuthorMigration(t *testing.T) {
-	ctx := context.Background()
-	st, err := Open(model.DBSQLite, filepath.Join(t.TempDir(), "old.db"), testCrypter(t))
-	if err != nil {
-		t.Fatal(err)
+	t.Run("sqlite", func(t *testing.T) {
+		st, err := Open(model.DBSQLite, filepath.Join(t.TempDir(), "old.db"), testCrypter(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		b := baseOf(t, st)
+		migrateUpTo(t, b, 77)
+		checkInvitesAuthorMigration(t, st, b)
+	})
+	dsn := os.Getenv("TEST_POSTGRES_DSN")
+	if dsn == "" {
+		return
 	}
-	t.Cleanup(func() { _ = st.Close() })
-	b := baseOf(t, st)
-	migrateUpTo(t, b, 77)
+	t.Run("postgres", func(t *testing.T) {
+		ctx := context.Background()
+		st, err := Open(model.DBPostgres, dsn, testCrypter(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		if err := st.Migrate(ctx); err != nil {
+			t.Fatal(err)
+		}
+		cleanPGData(t, dsn)
+		// Откат к v77 для приглашений: колонок 0080/0081 и их версий нет.
+		b := baseOf(t, st)
+		for _, q := range []string{
+			"ALTER TABLE invites DROP COLUMN created_by",
+			"ALTER TABLE invites DROP COLUMN grant_kind",
+			"DELETE FROM schema_migrations WHERE version IN (80, 81)",
+		} {
+			if _, err := b.db.ExecContext(ctx, q); err != nil {
+				t.Fatal(err)
+			}
+		}
+		checkInvitesAuthorMigration(t, st, b)
+	})
+}
+
+func checkInvitesAuthorMigration(t *testing.T, st Storage, b *base) {
+	t.Helper()
+	ctx := context.Background()
 	exp := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
 	if _, err := b.db.ExecContext(ctx,
 		"INSERT INTO invites (code, max_uses, used, expires_at, created_at, revoked, note) "+
