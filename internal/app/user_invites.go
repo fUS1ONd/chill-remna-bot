@@ -139,24 +139,14 @@ func (a *App) inviteShareURL(ctx context.Context, lang, code string) string {
 	if link == "" {
 		return ""
 	}
-	return "https://t.me/share/url?url=" + url.QueryEscape(link) + "&text=" + url.QueryEscape(a.inviteShareBody(lang, code))
+	return "https://t.me/share/url?url=" + url.QueryEscape(link) + "&text=" + url.QueryEscape(a.inviteShareMessage(lang, code, ""))
 }
 
-// inviteShareBody — текст «Поделиться» без Telegram-ссылки (её выбор чата
-// подставляет сам): приглашение и ссылка кабинета, если он включён.
-func (a *App) inviteShareBody(lang, code string) string {
+// inviteShareMessage — текст «Поделиться»: приглашение, link (пусто — её
+// подставляет сам выбор чата Telegram) и ссылка кабинета, если он включён.
+func (a *App) inviteShareMessage(lang, code, link string) string {
 	text := i18n.T(lang, "uinv.share_text")
-	if cab := a.inviteCabinetLink(code); cab != "" {
-		text += "\n" + i18n.T(lang, "uinv.share_cabinet", cab)
-	}
-	return text
-}
-
-// inviteShareText — тот же текст со всеми ссылками для «Скопировать» в
-// браузере, где выбора чата Telegram нет.
-func (a *App) inviteShareText(ctx context.Context, lang, code string) string {
-	text := i18n.T(lang, "uinv.share_text")
-	if link := a.inviteLink(ctx, code); link != "" {
+	if link != "" {
 		text += "\n" + link
 	}
 	if cab := a.inviteCabinetLink(code); cab != "" {

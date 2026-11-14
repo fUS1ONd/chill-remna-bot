@@ -47,12 +47,13 @@ func (a *App) MiniInvites(ctx context.Context, tgID int64) web.MiniInvitesDTO {
 		if !inv.Active(now) {
 			continue
 		}
+		link := a.inviteLink(ctx, inv.Code)
 		d.Invites = append(d.Invites, web.MiniInviteDTO{
 			Code:        inv.Code,
-			Link:        a.inviteLink(ctx, inv.Code),
+			Link:        link,
 			CabinetLink: a.inviteCabinetLink(inv.Code),
 			ShareURL:    a.inviteShareURL(ctx, lang, inv.Code),
-			ShareText:   a.inviteShareText(ctx, lang, inv.Code),
+			ShareText:   a.inviteShareMessage(lang, inv.Code, link),
 			ExpireAt:    formatExpire(inv.ExpiresAt, lang),
 		})
 	}
