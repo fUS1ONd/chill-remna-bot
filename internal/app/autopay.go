@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -187,9 +188,20 @@ func (a *App) showAutoPay(ctx context.Context, chatID int64) {
 	on := ap != nil && ap.Enabled && ap.MethodID != ""
 	back := []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), "menu:mysubs"), btn(i18n.T(lang, "btn.home"), "menu:home")}
 
+	// Отвязка доступна, пока способ оплаты сохранён: даже если магазин
+	// выключил автоплатежи, человек вправе убрать карту из бота.
+	var unlink []models.InlineKeyboardButton
+	if ap != nil && ap.MethodID != "" {
+		unlink = []models.InlineKeyboardButton{btn(i18n.T(lang, "ap.btn_unlink"), "ap:unlink")}
+	}
+
 	if !a.autoPayAvailable() && !on {
+		rows := [][]models.InlineKeyboardButton{}
+		if unlink != nil {
+			rows = append(rows, unlink)
+		}
 		a.sendKBSection(ctx, chatID, assets.SectionMySubscription, i18n.T(lang, "ap.unavailable"),
-			[][]models.InlineKeyboardButton{back})
+			append(rows, back))
 		return
 	}
 	if !on {
@@ -197,7 +209,7 @@ func (a *App) showAutoPay(ctx context.Context, chatID int64) {
 		rows := [][]models.InlineKeyboardButton{}
 		if ap != nil && ap.MethodID != "" {
 			// Способ оплаты уже сохранён — включаем обратно одной кнопкой.
-			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "ap.btn_on"), "ap:on")})
+			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "ap.btn_on"), "ap:on")}, unlink)
 		} else {
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "ap.btn_buy"), "menu:buy")})
 		}
@@ -224,6 +236,7 @@ func (a *App) showAutoPay(ctx context.Context, chatID int64) {
 	}
 	a.sendKBSection(ctx, chatID, assets.SectionMySubscription, text, [][]models.InlineKeyboardButton{
 		{btn(i18n.T(lang, "ap.btn_off"), "ap:off")},
+		unlink,
 		back,
 	})
 }
@@ -261,6 +274,31 @@ func (a *App) onAutoPayUser(ctx context.Context, chatID int64, val string) {
 				{btn(i18n.T(lang, "ap.btn_off"), "ap:off")},
 				{btn(i18n.T(lang, "btn.back"), "menu:mysubs"), btn(i18n.T(lang, "btn.home"), "menu:home")},
 			})
+	case "unlink":
+		ap := a.getAutoPay(ctx, chatID)
+		if ap == nil || ap.MethodID == "" {
+			a.showAutoPay(ctx, chatID)
+			return
+		}
+		card := ap.Title
+		if card == "" {
+			card = i18n.T(lang, "ap.card_unknown")
+		}
+		a.sendKBSection(ctx, chatID, assets.SectionMySubscription, i18n.T(lang, "ap.unlink_confirm", card),
+			[][]models.InlineKeyboardButton{
+				{btn(i18n.T(lang, "ap.btn_unlink_yes"), "ap:unlinkok")},
+				{btn(i18n.T(lang, "btn.cancel"), "ap:show")},
+			})
+	case "unlinkok":
+		if err := a.unlinkAutoPay(ctx, chatID); err != nil {
+			a.log.Warn("autopay: отвязка карты", "tg_id", chatID, "err", err)
+			a.showAutoPay(ctx, chatID)
+			return
+		}
+		a.sendKBSection(ctx, chatID, assets.SectionMySubscription, i18n.T(lang, "ap.unlinked"),
+			[][]models.InlineKeyboardButton{
+				{btn(i18n.T(lang, "btn.back"), "menu:mysubs"), btn(i18n.T(lang, "btn.home"), "menu:home")},
+			})
 	case "no":
 		// Отказ от предложения: карта остаётся сохранённой в ЮKassa, но
 		// списаний нет — включить можно позже той же кнопкой.
@@ -273,6 +311,29 @@ func (a *App) onAutoPayUser(ctx context.Context, chatID int64, val string) {
 				{btn(i18n.T(lang, "btn.home"), "menu:home")},
 			})
 	}
+}
+
+// unlinkAutoPay отвязывает карту: запись автопродления удаляется целиком.
+// Берёт тот же замок, что и списание этого человека (autoPayLk): идущее
+// списание доработает до конца, а следующее перечитает запись и не найдёт её —
+// после возврата отсюда списаний гарантированно нет.
+func (a *App) unlinkAutoPay(ctx context.Context, chatID int64) error {
+	if a.store == nil {
+		return fmt.Errorf("хранилище недоступно")
+	}
+	lk := a.autoPayLock(chatID)
+	lk.Lock()
+	defer lk.Unlock()
+	if err := a.store.DeleteAutoPay(ctx, chatID); err != nil {
+		return err
+	}
+	a.payLog(ctx, model.PayMethodYooKassa, "", chatID, "autopay_unlinked", "карта отвязана пользователем")
+	return nil
+}
+
+// autoPayLock — замок автосписания одного человека.
+func (a *App) autoPayLock(chatID int64) *sync.Mutex {
+	return &a.autoPayLk[extLockIndex(strconv.FormatInt(chatID, 10))]
 }
 
 // autoPayPrice — актуальная цена периода для автосписания.
@@ -464,6 +525,11 @@ func currencyCode(cur string) bool {
 // Возвращает непустую строку, если проблема на стороне магазина (её показываем
 // админу один раз за проход планировщика, а пользователя не трогаем).
 func (a *App) chargeAutoPay(ctx context.Context, ap *model.AutoPay, now, exp time.Time) string {
+	// Вся попытка — под замком человека: отвязка карты (unlinkAutoPay) не
+	// может вклиниться между перечитыванием записи и запросом в ЮKassa.
+	lk := a.autoPayLock(ap.TelegramID)
+	lk.Lock()
+	defer lk.Unlock()
 	// Проход по большой базе длится минуты: пользователь мог выключить
 	// автопродление после снятия снапшота ListAutoPay — перечитываем запись
 	// непосредственно перед списанием.
