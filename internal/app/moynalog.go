@@ -28,6 +28,7 @@ func (a *App) moynalogCfg() model.MoyNalogConfig {
 // тестах.
 type moyNalogAPI interface {
 	CreateIncome(ctx context.Context, in moynalog.Income) (string, error)
+	ListIncomes(ctx context.Context, from, to time.Time) ([]moynalog.IncomeRecord, bool, error)
 }
 
 func (a *App) mnClientGet() (moyNalogAPI, model.MoyNalogConfig) {
@@ -128,9 +129,10 @@ func capturedStr(capturedAt time.Time) string {
 
 func receiptKey(provider, extID string) string { return provider + "/" + extID }
 
-// processReceipt доводит застолблённый чек в pending до ФНС — одна попытка.
-// Строка перечитывается под receiptBusy, поэтому вызывать можно с любого пути:
-// чек, уже пробитый или занятый другим путём, второй раз в ФНС не уйдёт.
+// processReceipt доводит чек до ФНС — одна попытка: pending пробивает,
+// unknown сверяет по метке. Строка перечитывается под receiptBusy, поэтому
+// вызывать можно с любого пути: чек, уже пробитый или занятый другим путём,
+// второй раз в ФНС не уйдёт. В конце, если пора, — алерт владельцу.
 func (a *App) processReceipt(ctx context.Context, provider, extID string) {
 	key := receiptKey(provider, extID)
 	if _, busy := a.receiptBusy.LoadOrStore(key, struct{}{}); busy {
@@ -143,18 +145,33 @@ func (a *App) processReceipt(ctx context.Context, provider, extID string) {
 		a.log.Error("moynalog: чтение чека", "err", err, "ext", extID)
 		return
 	}
-	if r == nil || r.State != model.ReceiptPending {
+	if r == nil {
 		return
 	}
-	client, _ := a.mnClientGet()
-	if client == nil {
-		return
+	if client, _ := a.mnClientGet(); client != nil {
+		switch r.State {
+		case model.ReceiptPending:
+			a.createIncome(ctx, client, r)
+		case model.ReceiptUnknown:
+			if !receiptSettled(r) {
+				break
+			}
+			a.reconcileReceipt(ctx, client, r)
+		}
+		if r, err = a.store.GetReceipt(ctx, provider, extID); err != nil || r == nil {
+			return
+		}
 	}
+	a.alertReceiptIfDue(ctx, r)
+}
+
+// createIncome — одно обращение к ФНС за чеком r и запись исхода.
+func (a *App) createIncome(ctx context.Context, client moyNalogAPI, r *model.Receipt) {
 	incomeAt, _ := time.Parse(time.RFC3339, r.IncomeAt)
 
-	ctx, cancel := context.WithTimeout(ctx, receiptTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, receiptTimeout)
 	defer cancel()
-	uuid, err := client.CreateIncome(ctx, moynalog.Income{
+	uuid, err := client.CreateIncome(callCtx, moynalog.Income{
 		Amount:        float64(r.AmountKopecks) / 100,
 		Name:          r.Name,
 		OperationTime: incomeAt,
@@ -164,21 +181,191 @@ func (a *App) processReceipt(ctx context.Context, provider, extID string) {
 	saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer saveCancel()
 	if err == nil {
-		if serr := a.store.SetReceiptResult(saveCtx, provider, extID, model.ReceiptCreated, uuid, ""); serr != nil {
+		if serr := a.store.SetReceiptResult(saveCtx, r.Provider, r.ExtID, model.ReceiptCreated, uuid, ""); serr != nil {
 			// Чек в ФНС есть, а в базе он pending — следующий проход пробил бы
 			// второй. Уводим в unknown: сверка по метке найдёт этот же чек.
-			a.log.Error("moynalog: чек пробит, но не записан", "err", serr, "ext", extID, "uuid", uuid)
-			_ = a.store.SetReceiptResult(saveCtx, provider, extID, model.ReceiptUnknown, "", "чек пробит, uuid не записался: "+uuid)
+			a.log.Error("moynalog: чек пробит, но не записан", "err", serr, "ext", r.ExtID, "uuid", uuid)
+			_ = a.store.SetReceiptResult(saveCtx, r.Provider, r.ExtID, model.ReceiptUnknown, "", "чек пробит, uuid не записался: "+uuid)
 			return
 		}
-		a.log.Info("moynalog: чек пробит", "ext", extID, "uuid", uuid, "kopecks", r.AmountKopecks)
+		a.log.Info("moynalog: чек пробит", "ext", r.ExtID, "uuid", uuid, "kopecks", r.AmountKopecks)
 		return
 	}
 	state := receiptStateAfter(err)
-	if serr := a.store.SetReceiptResult(saveCtx, provider, extID, state, "", err.Error()); serr != nil {
-		a.log.Error("moynalog: исход пробития не записан", "err", serr, "ext", extID, "state", state)
+	if serr := a.store.SetReceiptResult(saveCtx, r.Provider, r.ExtID, state, "", err.Error()); serr != nil {
+		a.log.Error("moynalog: исход пробития не записан", "err", serr, "ext", r.ExtID, "state", state)
 	}
-	a.log.Error("moynalog: чек не пробит", "err", err, "ext", extID, "state", state)
+	a.log.Error("moynalog: чек не пробит", "err", err, "ext", r.ExtID, "state", state)
+}
+
+// reconcileDelay — сколько unknown выжидает до сверки. Доход, принятый ФНС
+// секунду назад, мог ещё не попасть в список доходов: сверка по такому
+// списку пробила бы дубль.
+const reconcileDelay = 10 * time.Minute
+
+// receiptSettled — прошло ли с последнего исхода по чеку достаточно, чтобы
+// сверять его по списку доходов.
+func receiptSettled(r *model.Receipt) bool {
+	at, err := time.Parse(time.RFC3339, r.UpdatedAt)
+	return err != nil || time.Since(at) >= reconcileDelay
+}
+
+// reconcileWindow — запас списка доходов вокруг чека: до момента дохода и
+// после текущего момента.
+const reconcileWindow = 24 * time.Hour
+
+// reconcileReceipt выясняет судьбу чека, ответ на пробитие которого потерян.
+// Ищем по метке, а не по uuid: uuid выдаёт ФНС в том самом ответе, который
+// потерялся. Нашли — записываем uuid. Список полный и чека нет — ФНС его не
+// приняла, пробиваем заново. Список неполный или сверка не удалась — чек
+// остаётся unknown до следующего прохода: пробить вслепую — рискнуть дублем.
+func (a *App) reconcileReceipt(ctx context.Context, client moyNalogAPI, r *model.Receipt) {
+	saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer saveCancel()
+	keepUnknown := func(reason string) {
+		if err := a.store.SetReceiptResult(saveCtx, r.Provider, r.ExtID, model.ReceiptUnknown, "", reason); err != nil {
+			a.log.Error("moynalog: исход сверки не записан", "err", err, "ext", r.ExtID)
+		}
+	}
+	if r.Marker == "" {
+		a.log.Error("moynalog: чек без метки, сверять нечем", "ext", r.ExtID)
+		return
+	}
+	incomeAt, err := time.Parse(time.RFC3339, r.IncomeAt)
+	if err != nil {
+		a.log.Error("moynalog: у чека нечитаемый момент дохода, сверка невозможна", "ext", r.ExtID, "income_at", r.IncomeAt)
+		return
+	}
+	// Окно — от дохода до текущего момента: чек мог быть пробит намного позже
+	// списания (пролежал в pending, пока ФНС была недоступна).
+	listCtx, cancel := context.WithTimeout(ctx, receiptTimeout)
+	defer cancel()
+	list, complete, err := client.ListIncomes(listCtx, incomeAt.Add(-reconcileWindow), time.Now().Add(reconcileWindow))
+	if err != nil {
+		a.log.Warn("moynalog: сверка чека не удалась", "err", err, "ext", r.ExtID)
+		keepUnknown("сверка: " + err.Error())
+		return
+	}
+	var found []moynalog.IncomeRecord
+	for _, in := range list {
+		if in.Matches(r.Marker) {
+			found = append(found, in)
+		}
+	}
+	switch {
+	case len(found) == 1:
+		state := model.ReceiptCreated
+		if found[0].Canceled {
+			// Чек нашёлся аннулированным: состояние отражает кабинет, второй
+			// чек по этому платежу всё равно не пробиваем.
+			state = model.ReceiptCanceled
+		}
+		if err := a.store.SetReceiptResult(saveCtx, r.Provider, r.ExtID, state, found[0].UUID, ""); err != nil {
+			a.log.Error("moynalog: найденный сверкой чек не записан", "err", err, "ext", r.ExtID, "uuid", found[0].UUID)
+			return
+		}
+		a.log.Info("moynalog: сверка нашла чек по метке", "ext", r.ExtID, "uuid", found[0].UUID, "state", state)
+	case len(found) > 1:
+		// Угадывать, какой из чеков наш, автоматика не берётся: остаётся
+		// unknown, через сутки владелец получит алерт и разберётся в кабинете.
+		a.log.Error("moynalog: по метке нашлось несколько чеков", "ext", r.ExtID, "marker", r.Marker, "count", len(found))
+		keepUnknown("по метке " + r.Marker + " нашлось чеков: " + strconv.Itoa(len(found)))
+	case !complete:
+		a.log.Warn("moynalog: список доходов неполный, сверка — следующим проходом", "ext", r.ExtID)
+		keepUnknown("список доходов неполный, чек по метке не найден")
+	default:
+		a.log.Info("moynalog: сверка чек не нашла, пробиваем заново", "ext", r.ExtID, "marker", r.Marker)
+		a.createIncome(ctx, client, r)
+	}
+}
+
+// receiptStuckAge — сколько чек может не становиться created до алерта.
+const receiptStuckAge = 24 * time.Hour
+
+// alertReceiptIfDue шлёт владельцу алерт по чеку, если пора: отклонён ФНС
+// или не пробит дольше суток. Алерт один на чек — отметка в строке ставится
+// до отправки и только если её ещё нет.
+func (a *App) alertReceiptIfDue(ctx context.Context, r *model.Receipt) {
+	if r.AlertedAt != "" {
+		return
+	}
+	lang := a.lang(a.cfg.AdminID)
+	lastErr := r.LastError
+	if lastErr == "" {
+		lastErr = "—"
+	}
+	var text string
+	switch r.State {
+	case model.ReceiptRejected:
+		text = i18n.T(lang, "admin.receipt_rejected", escapeName(r.ExtID), kopecksToRub(r.AmountKopecks), escapeName(lastErr))
+	case model.ReceiptPending, model.ReceiptUnknown:
+		created, err := time.Parse(time.RFC3339, r.CreatedAt)
+		if err != nil || time.Since(created) < receiptStuckAge {
+			return
+		}
+		text = i18n.T(lang, "admin.receipt_stuck", escapeName(r.ExtID), kopecksToRub(r.AmountKopecks), r.State, escapeName(lastErr))
+	default:
+		return
+	}
+	ok, err := a.store.MarkReceiptAlerted(ctx, r.Provider, r.ExtID)
+	if err != nil {
+		a.log.Error("moynalog: отметка алерта по чеку", "err", err, "ext", r.ExtID)
+		return
+	}
+	if !ok {
+		return
+	}
+	a.notify(ctx, a.cfg.AdminID, text)
+}
+
+const (
+	// receiptPassTick — период планового прохода по чекам.
+	receiptPassTick = 30 * time.Minute
+	// receiptPassBatch — потолок чеков за проход: обращение к ФНС стоит до
+	// минуты, а восстановление базы ждёт конца прохода. Не успевшие — в
+	// следующий раз: давно не тронутые идут первыми.
+	receiptPassBatch = 50
+)
+
+// RunReceipts — плановый проход по чекам раз в 30 минут.
+func (a *App) RunReceipts(ctx context.Context) {
+	t := time.NewTicker(receiptPassTick)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.receiptPassOnce(ctx)
+		}
+	}
+}
+
+// receiptPassOnce добивает pending, сверяет unknown и шлёт алерты. Идёт
+// только по таблице чеков, а не по платежам: перенесённая из старого бота
+// история платежей строк чеков не имеет и чеков не порождает.
+func (a *App) receiptPassOnce(ctx context.Context) {
+	if !a.enterWork() {
+		return
+	}
+	defer a.leaveWork()
+	a.mu.Lock()
+	st := a.store
+	a.mu.Unlock()
+	if st == nil {
+		return
+	}
+	list, err := st.ListOpenReceipts(ctx, receiptPassBatch)
+	if err != nil {
+		a.log.Warn("moynalog: список чеков для прохода", "err", err)
+		return
+	}
+	for i := range list {
+		if a.paused() || ctx.Err() != nil {
+			return
+		}
+		a.processReceipt(ctx, list[i].Provider, list[i].ExtID)
+	}
 }
 
 // receiptStateAfter — состояние чека после неудачного обращения к ФНС.

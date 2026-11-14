@@ -185,3 +185,56 @@ func TestPaymentCapturedAtMigration(t *testing.T) {
 		t.Fatalf("старый платёж после миграции: %+v, err=%v", items, err)
 	}
 }
+
+// Плановый проход видит только чеки с работой: pending, unknown и rejected
+// без алерта. Алерт по чеку отмечается ровно один раз.
+func TestReceiptOpenAndAlerted(t *testing.T) {
+	eachStore(t, func(t *testing.T, st Storage) {
+		ctx := context.Background()
+		for _, ext := range []string{"p", "u", "c", "r", "x"} {
+			if _, err := st.ClaimReceipt(ctx, sampleReceipt(model.PayMethodYooKassa, ext)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_ = st.SetReceiptResult(ctx, model.PayMethodYooKassa, "u", model.ReceiptUnknown, "", "оборвалось")
+		_ = st.SetReceiptResult(ctx, model.PayMethodYooKassa, "c", model.ReceiptCreated, "uuid", "")
+		_ = st.SetReceiptResult(ctx, model.PayMethodYooKassa, "r", model.ReceiptRejected, "", "400")
+		_ = st.SetReceiptResult(ctx, model.PayMethodYooKassa, "x", model.ReceiptCanceled, "uuid", "")
+
+		open := func() map[string]bool {
+			t.Helper()
+			list, err := st.ListOpenReceipts(ctx, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]bool{}
+			for _, r := range list {
+				got[r.ExtID] = true
+			}
+			return got
+		}
+		if got := open(); len(got) != 3 || !got["p"] || !got["u"] || !got["r"] {
+			t.Fatalf("открытые чеки: %v", got)
+		}
+
+		ok, err := st.MarkReceiptAlerted(ctx, model.PayMethodYooKassa, "r")
+		if err != nil || !ok {
+			t.Fatalf("первая отметка алерта: ok=%v err=%v", ok, err)
+		}
+		if ok, err := st.MarkReceiptAlerted(ctx, model.PayMethodYooKassa, "r"); err != nil || ok {
+			t.Fatalf("вторая отметка алерта должна не пройти: ok=%v err=%v", ok, err)
+		}
+		if r, _ := st.GetReceipt(ctx, model.PayMethodYooKassa, "r"); r == nil || r.AlertedAt == "" {
+			t.Fatalf("отметка не легла: %+v", r)
+		}
+		// rejected с алертом проходу больше не нужен; pending с алертом —
+		// по-прежнему нужен: его продолжают добивать.
+		_, _ = st.MarkReceiptAlerted(ctx, model.PayMethodYooKassa, "p")
+		if got := open(); len(got) != 2 || !got["p"] || !got["u"] {
+			t.Fatalf("открытые чеки после алертов: %v", got)
+		}
+		if list, _ := st.ListOpenReceipts(ctx, 1); len(list) != 1 {
+			t.Fatalf("лимит выборки: %d", len(list))
+		}
+	})
+}

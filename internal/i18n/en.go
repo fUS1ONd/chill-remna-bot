@@ -538,6 +538,8 @@ var en = map[string]string{
 	"paylog.truncated":         "⚠️ Showing the latest %d of %d entries — the log exceeds the export limit.",
 	"admin.payment_unrecorded": "🚨 Payment %s <code>%s</code> from %s for %s: the subscription was delivered but the payment record was NOT saved after retries. Idempotency is broken — reconcile this payment manually (log stage: error).",
 	"admin.receipt_unclaimed":  "🧾 MyTax receipt for YooKassa payment <code>%s</code> (%s ₽) was not claimed: the database rejected the record. No receipt was issued — register it in the MyTax cabinet manually.",
+	"admin.receipt_rejected":   "🧾 MyTax receipt for YooKassa payment <code>%s</code> (%s ₽) was rejected by the tax service for good: %s. The bot will not retry — sort it out and register the receipt in the MyTax cabinet manually.",
+	"admin.receipt_stuck":      "🧾 MyTax receipt for YooKassa payment <code>%s</code> (%s ₽) has not been issued for over a day (state %s, last error: %s). The bot keeps trying — check the MyTax cabinet.",
 	"admin.orphan_payment":     "⚠️ <b>A payment arrived for a deleted user</b>\n\nMethod: %s\nPayment id: <code>%s</code>\nAmount: %s\nID: <code>%d</code>\n\nNo subscription was issued and no balance was credited — the invoice is closed. Handle the money by hand: refund it or issue the service again.",
 	"admin.refund_failed":      "🚨 REFUND FAILED: %s was charged %s for a subscription, provisioning failed, and the money could not be returned to the balance. Refund it manually (log: method balance, stage error).",
 	"admin.refund_unclear":     "⚠️ %s was refunded to the balance (%s), but the panel did not answer — it may still have extended the subscription. Check the expiry in the panel manually.",

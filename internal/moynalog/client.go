@@ -9,6 +9,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -292,4 +294,132 @@ func (c *Client) createOnce(ctx context.Context, in Income) (id string, status i
 		id = ir.ID
 	}
 	return id, resp.StatusCode, "", nil
+}
+
+// IncomeRecord — доход в кабинете ФНС, то есть чек.
+type IncomeRecord struct {
+	UUID string
+	// Names — наименование дохода и наименования услуг в нём.
+	Names    []string
+	Canceled bool
+}
+
+// Matches — стоит ли метка в наименовании чека. Метка ищется в скобках, как
+// её ставит бот: шесть символов голыми могли бы встретиться и в самом
+// наименовании услуги.
+func (r IncomeRecord) Matches(marker string) bool {
+	if marker == "" {
+		return false
+	}
+	for _, n := range r.Names {
+		if strings.Contains(n, "("+marker+")") {
+			return true
+		}
+	}
+	return false
+}
+
+// incomesLimit — сколько доходов берётся одной страницей; incomesMaxPages —
+// потолок страниц на один список. Окно сверки растёт, пока чек лежит в
+// unknown, поэтому страницы обходятся; не дошли до конца — список неполный.
+const (
+	incomesLimit    = 100
+	incomesMaxPages = 10
+)
+
+type incomesResponse struct {
+	Content []struct {
+		ApprovedReceiptUUID string `json:"approvedReceiptUuid"`
+		Name                string `json:"name"`
+		CancellationInfo    any    `json:"cancellationInfo"`
+		Services            []struct {
+			Name string `json:"name"`
+		} `json:"services"`
+	} `json:"content"`
+	HasMore bool `json:"hasMore"`
+}
+
+// ListIncomes — доходы с from по to. complete=false — список мог обрезаться:
+// «чека в нём нет» тогда ничего не значит, а пробить заново по такому
+// списку — рискнуть дублем.
+func (c *Client) ListIncomes(ctx context.Context, from, to time.Time) (list []IncomeRecord, complete bool, err error) {
+	for page := 0; page < incomesMaxPages; page++ {
+		ir, err := c.incomesPage(ctx, from, to, page*incomesLimit)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, it := range ir.Content {
+			r := IncomeRecord{UUID: it.ApprovedReceiptUUID, Names: []string{it.Name}, Canceled: it.CancellationInfo != nil}
+			for _, s := range it.Services {
+				r.Names = append(r.Names, s.Name)
+			}
+			list = append(list, r)
+		}
+		// Полная страница без hasMore — тоже повод смотреть дальше: поле
+		// могло не прийти, а обрезанный список за полный не выдаём.
+		if !ir.HasMore && len(ir.Content) < incomesLimit {
+			return list, true, nil
+		}
+	}
+	return list, false, nil
+}
+
+// incomesPage — одна страница списка доходов, с перелогином при отказе токена.
+func (c *Client) incomesPage(ctx context.Context, from, to time.Time, offset int) (*incomesResponse, error) {
+	q := url.Values{}
+	q.Set("from", from.In(moscow).Format(timeLayout))
+	q.Set("to", to.In(moscow).Format(timeLayout))
+	q.Set("offset", strconv.Itoa(offset))
+	q.Set("limit", strconv.Itoa(incomesLimit))
+	q.Set("sortBy", "operation_time:desc")
+	path := BaseURL + "/incomes?" + q.Encode()
+
+	c.mu.Lock()
+	tok := c.token
+	c.mu.Unlock()
+	if tok == "" {
+		if err := c.authenticate(ctx); err != nil {
+			return nil, &Error{Kind: KindRetry, Msg: "вход в кабинет", Err: err}
+		}
+	}
+	status, raw, err := c.get(ctx, path)
+	if err == nil && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
+		if err := c.authenticate(ctx); err != nil {
+			return nil, &Error{Kind: KindRetry, Msg: "вход в кабинет", Err: err}
+		}
+		status, raw, err = c.get(ctx, path)
+	}
+	if err != nil {
+		return nil, &Error{Kind: KindRetry, Msg: "список доходов", Err: err}
+	}
+	if status != http.StatusOK {
+		return nil, &Error{Kind: KindRetry, Msg: fmt.Sprintf("список доходов: status %d: %s", status, strings.TrimSpace(string(raw)))}
+	}
+	var ir incomesResponse
+	if err := json.Unmarshal(raw, &ir); err != nil {
+		return nil, &Error{Kind: KindRetry, Msg: "нечитаемый список доходов", Err: err}
+	}
+	return &ir, nil
+}
+
+// get — GET с текущим токеном; тело читается целиком, но не больше 1 МиБ.
+func (c *Client) get(ctx context.Context, u string) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	c.mu.Lock()
+	tok := c.token
+	c.mu.Unlock()
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, raw, nil
 }

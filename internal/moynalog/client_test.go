@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -152,5 +154,116 @@ func TestCreateIncomeRelogin(t *testing.T) {
 	}
 	if !strings.Contains(c.token, "tok123") {
 		t.Fatalf("токен не обновился: %q", c.token)
+	}
+}
+
+// incomesStub — кабинет ФНС, отдающий на /incomes тело body; в q — запрос.
+func incomesStub(t *testing.T, body string, q *url.Values) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/auth/lkfl":
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "tok123"})
+		case "/incomes":
+			if r.Header.Get("Authorization") != "Bearer tok123" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			*q = r.URL.Query()
+			_, _ = w.Write([]byte(body))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	prev := BaseURL
+	BaseURL = srv.URL
+	t.Cleanup(func() { BaseURL = prev })
+}
+
+// Список доходов разбирается, метка ищется в наименовании чека и его услуг,
+// границы уходят по Москве.
+func TestListIncomes(t *testing.T) {
+	var q url.Values
+	incomesStub(t, `{"content":[`+
+		`{"approvedReceiptUuid":"r1","name":"VPN (abc123)","services":[{"name":"VPN (abc123)"}]},`+
+		`{"approvedReceiptUuid":"r2","name":"","services":[{"name":"VPN (zzz999)"}],"cancellationInfo":{"comment":"возврат"}}`+
+		`],"hasMore":false}`, &q)
+
+	from := time.Date(2026, 10, 31, 21, 0, 0, 0, time.UTC)
+	list, complete, err := New("l", "p").ListIncomes(context.Background(), from, from.Add(48*time.Hour))
+	if err != nil || !complete || len(list) != 2 {
+		t.Fatalf("list=%+v complete=%v err=%v", list, complete, err)
+	}
+	if q.Get("from") != "2026-11-01T00:00:00+03:00" || q.Get("to") != "2026-11-03T00:00:00+03:00" {
+		t.Fatalf("границы выборки: %v", q)
+	}
+	if !list[0].Matches("abc123") || list[0].Matches("zzz999") || list[0].UUID != "r1" || list[0].Canceled {
+		t.Fatalf("первый доход: %+v", list[0])
+	}
+	if !list[1].Matches("zzz999") || !list[1].Canceled {
+		t.Fatalf("метка в услуге и аннулирование: %+v", list[1])
+	}
+	if list[0].Matches("") || list[0].Matches("abc") {
+		t.Fatal("пустая или частичная метка не должна совпадать")
+	}
+}
+
+// Список обходится по страницам; полным он считается, только если дошли до
+// конца. Упёрлись в потолок страниц — неполный.
+func TestListIncomesPages(t *testing.T) {
+	page := func(n int, more bool) string {
+		items := make([]string, n)
+		for i := range items {
+			items[i] = `{"approvedReceiptUuid":"r","name":"x"}`
+		}
+		m := "false"
+		if more {
+			m = "true"
+		}
+		return `{"content":[` + strings.Join(items, ",") + `],"hasMore":` + m + `}`
+	}
+	for name, tc := range map[string]struct {
+		pages    func(offset int) string
+		n        int
+		complete bool
+	}{
+		"hasMore, потом конец": {func(o int) string {
+			if o == 0 {
+				return page(1, true)
+			}
+			return page(1, false)
+		}, 2, true},
+		"полная страница без hasMore": {func(o int) string {
+			if o == 0 {
+				return page(incomesLimit, false)
+			}
+			return page(0, false)
+		}, incomesLimit, true},
+		"потолок страниц": {func(int) string { return page(1, true) }, incomesMaxPages, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var offsets []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/auth/lkfl":
+					_ = json.NewEncoder(w).Encode(map[string]string{"token": "tok123"})
+				case "/incomes":
+					offsets = append(offsets, r.URL.Query().Get("offset"))
+					o, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+					_, _ = w.Write([]byte(tc.pages(o)))
+				}
+			}))
+			t.Cleanup(srv.Close)
+			prev := BaseURL
+			BaseURL = srv.URL
+			t.Cleanup(func() { BaseURL = prev })
+
+			list, complete, err := New("l", "p").ListIncomes(context.Background(), time.Now(), time.Now())
+			if err != nil || complete != tc.complete || len(list) != tc.n {
+				t.Fatalf("len=%d complete=%v err=%v offsets=%v", len(list), complete, err, offsets)
+			}
+		})
 	}
 }

@@ -55,3 +55,38 @@ func (b *base) SetReceiptResult(ctx context.Context, provider, extID, state, uui
 		state, uuid, lastError, nowStr(), provider, extID)
 	return err
 }
+
+func (b *base) ListOpenReceipts(ctx context.Context, limit int) ([]model.Receipt, error) {
+	// #nosec G202 -- колонки из константы receiptCols, значения передаются биндовыми параметрами
+	rows, err := b.db.QueryContext(ctx,
+		"SELECT "+receiptCols+" FROM receipts WHERE state IN ("+b.ph(1)+", "+b.ph(2)+") "+
+			"OR (state = "+b.ph(3)+" AND alerted_at = '') ORDER BY updated_at, created_at, provider, ext_id LIMIT "+b.ph(4),
+		model.ReceiptPending, model.ReceiptUnknown, model.ReceiptRejected, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Receipt
+	for rows.Next() {
+		var r model.Receipt
+		if err := rows.Scan(&r.Provider, &r.ExtID, &r.AmountKopecks, &r.Name, &r.Marker, &r.IncomeAt, &r.UUID, &r.State,
+			&r.Attempts, &r.LastError, &r.AlertedAt, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (b *base) MarkReceiptAlerted(ctx context.Context, provider, extID string) (bool, error) {
+	// Условие alerted_at = '' — и есть «один алерт на чек»: второй путь,
+	// пришедший к тому же чеку, получит ноль обновлённых строк.
+	res, err := b.db.ExecContext(ctx,
+		"UPDATE receipts SET alerted_at = "+b.ph(1)+" WHERE provider = "+b.ph(2)+" AND ext_id = "+b.ph(3)+" AND alerted_at = ''",
+		nowStr(), provider, extID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}

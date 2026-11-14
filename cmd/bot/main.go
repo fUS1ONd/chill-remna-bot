@@ -72,7 +72,7 @@ func main() {
 	webSrv.SetStaticDir(cfg.StaticDir)
 
 	var wg sync.WaitGroup
-	wg.Add(11)
+	wg.Add(12)
 	var botErr, webErr error
 
 	go func() {
@@ -115,6 +115,10 @@ func main() {
 	go func() {
 		defer wg.Done()
 		a.RunReminders(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		a.RunReceipts(ctx)
 	}()
 
 	go func() {

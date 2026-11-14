@@ -1173,6 +1173,34 @@ func (s *fakeStore) SetReceiptResult(_ context.Context, provider, extID, state, 
 	return nil
 }
 
+func (s *fakeStore) ListOpenReceipts(_ context.Context, limit int) ([]model.Receipt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []model.Receipt
+	for _, r := range s.receipts {
+		if r.State == model.ReceiptPending || r.State == model.ReceiptUnknown ||
+			(r.State == model.ReceiptRejected && r.AlertedAt == "") {
+			out = append(out, *r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt < out[j].UpdatedAt })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (s *fakeStore) MarkReceiptAlerted(_ context.Context, provider, extID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.receipts[provider+"/"+extID]
+	if !ok || r.AlertedAt != "" {
+		return false, nil
+	}
+	r.AlertedAt = time.Now().UTC().Format(time.RFC3339)
+	return true, nil
+}
+
 func (s *fakeStore) PaymentByExtID(_ context.Context, extID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

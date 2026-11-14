@@ -196,6 +196,13 @@ type Storage interface {
 	GetReceipt(ctx context.Context, provider, extID string) (*model.Receipt, error)
 	// SetReceiptResult записывает исход обращения к ФНС и считает попытку.
 	SetReceiptResult(ctx context.Context, provider, extID, state, uuid, lastError string) error
+	// ListOpenReceipts — чеки, по которым есть работа планового прохода:
+	// pending и unknown, а также rejected без алерта. Первыми — давно не
+	// тронутые: застрявшие чеки не забивают собой каждый проход.
+	ListOpenReceipts(ctx context.Context, limit int) ([]model.Receipt, error)
+	// MarkReceiptAlerted отмечает алерт владельцу по чеку. false — алерт по
+	// нему уже отмечен раньше.
+	MarkReceiptAlerted(ctx context.Context, provider, extID string) (bool, error)
 
 	MostPopularPlan(ctx context.Context) (months int, total int, err error)
 

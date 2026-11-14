@@ -20,7 +20,8 @@ import (
 )
 
 // fakeFNS — кабинет «Мой налог». answer решает исход n-го обращения (с 1);
-// по умолчанию ФНС принимает доход.
+// по умолчанию ФНС принимает доход. Принятый доход — и с ответом, и с
+// потерянным ответом — ложится в список доходов кабинета.
 type fakeFNS struct {
 	mu     sync.Mutex
 	got    []moynalog.Income
@@ -28,6 +29,12 @@ type fakeFNS struct {
 	// before вызывается до ответа: тесты смотрят, что лежит в базе в момент
 	// обращения к ФНС.
 	before func(in moynalog.Income)
+	// incomes — список доходов кабинета; incomplete — ФНС отдаёт его
+	// неполным; listErr — запрос списка не удался.
+	incomes    []moynalog.IncomeRecord
+	incomplete bool
+	listErr    error
+	lists      int
 }
 
 func (f *fakeFNS) CreateIncome(_ context.Context, in moynalog.Income) (string, error) {
@@ -39,10 +46,27 @@ func (f *fakeFNS) CreateIncome(_ context.Context, in moynalog.Income) (string, e
 	if before != nil {
 		before(in)
 	}
+	uuid, err := "uuid-"+itoa(n), error(nil)
 	if answer != nil {
-		return answer(n)
+		uuid, err = answer(n)
 	}
-	return "uuid-" + itoa(n), nil
+	if err == nil || moynalog.KindOf(err) == moynalog.KindUnknown {
+		// Потерянный ответ — после приёма: доход у ФНС есть.
+		f.mu.Lock()
+		f.incomes = append(f.incomes, moynalog.IncomeRecord{UUID: "uuid-" + itoa(n), Names: []string{in.Name}})
+		f.mu.Unlock()
+	}
+	return uuid, err
+}
+
+func (f *fakeFNS) ListIncomes(context.Context, time.Time, time.Time) ([]moynalog.IncomeRecord, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lists++
+	if f.listErr != nil {
+		return nil, false, f.listErr
+	}
+	return append([]moynalog.IncomeRecord(nil), f.incomes...), !f.incomplete, nil
 }
 
 func (f *fakeFNS) calls() []moynalog.Income {
@@ -415,5 +439,246 @@ func TestReceipt_NoCapturedAtDatedByAcceptance(t *testing.T) {
 	at, err := time.Parse(time.RFC3339, r.IncomeAt)
 	if err != nil || at.Before(before) || at.After(after) {
 		t.Fatalf("чек должен датироваться моментом принятия [%v, %v], got %q", before, after, r.IncomeAt)
+	}
+}
+
+// claimRow кладёт в таблицу строку чека так, будто бот застолбил её и упал
+// до ФНС.
+func claimRow(t *testing.T, fs *fakeStore, extID, marker string) {
+	t.Helper()
+	ok, err := fs.ClaimReceipt(context.Background(), &model.Receipt{
+		Provider: model.PayMethodYooKassa, ExtID: extID, AmountKopecks: 15000,
+		Name: "VPN (" + marker + ")", Marker: marker, IncomeAt: time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil || !ok {
+		t.Fatalf("строка чека: ok=%v err=%v", ok, err)
+	}
+}
+
+func setReceiptState(fs *fakeStore, extID, state, createdAt string) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	r := fs.receipts[model.PayMethodYooKassa+"/"+extID]
+	r.State = state
+	if createdAt != "" {
+		r.CreatedAt = createdAt
+	}
+}
+
+func receiptAlerts(fm *fakeMsg) int {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	n := 0
+	for _, t := range fm.texts {
+		if strings.HasPrefix(t, "🧾 Чек «Мой налог»") {
+			n++
+		}
+	}
+	return n
+}
+
+// Чек, застолблённый до перезапуска и так и не дошедший до ФНС, добивает
+// плановый проход.
+func TestReceiptPass_PendingAfterRestart(t *testing.T) {
+	a, _, fs, fns := receiptApp(t)
+	ctx := context.Background()
+	claimRow(t, fs, "yk-restart", "aaa111")
+
+	a.receiptPassOnce(ctx)
+	r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-restart")
+	if len(fns.calls()) != 1 || r.State != model.ReceiptCreated || r.UUID != "uuid-1" {
+		t.Fatalf("вызовов %d, строка %+v", len(fns.calls()), r)
+	}
+	if c := fns.calls()[0]; c.Name != "VPN (aaa111)" || c.Amount != 150 {
+		t.Fatalf("в ФНС ушло не то: %+v", c)
+	}
+	// Пробитый чек следующий проход не трогает.
+	a.receiptPassOnce(ctx)
+	if len(fns.calls()) != 1 {
+		t.Fatalf("пробитый чек ушёл в ФНС снова: %d", len(fns.calls()))
+	}
+}
+
+// ФНС была недоступна при оплате — чек добивает следующий проход.
+func TestReceiptPass_RetriesAfterFNSDown(t *testing.T) {
+	a, _, fs, fns := receiptApp(t)
+	ctx := context.Background()
+	fns.answer = fnsDown
+	if err := a.finalizeTopUp(ctx, 555, 15000, model.PayMethodYooKassa, "150 ₽", "yk-down"); err != nil {
+		t.Fatal(err)
+	}
+	a.moneyWG.Wait()
+	fns.answer = nil
+	a.receiptPassOnce(ctx)
+	r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-down")
+	if len(fns.calls()) != 2 || r.State != model.ReceiptCreated || r.UUID != "uuid-2" {
+		t.Fatalf("вызовов %d, строка %+v", len(fns.calls()), r)
+	}
+}
+
+// Ответ потерян, а чек у ФНС есть: сверка находит его по метке и записывает
+// uuid без второго пробития.
+func TestReceiptPass_UnknownFoundByMarker(t *testing.T) {
+	a, _, fs, fns := receiptApp(t)
+	ctx := context.Background()
+	fns.answer = fnsLost
+	if err := a.finalizeTopUp(ctx, 555, 15000, model.PayMethodYooKassa, "150 ₽", "yk-lost"); err != nil {
+		t.Fatal(err)
+	}
+	a.moneyWG.Wait()
+	// Чужой чек в кабинете с другой меткой сверку не сбивает.
+	fns.incomes = append(fns.incomes, moynalog.IncomeRecord{UUID: "чужой", Names: []string{"VPN (zzz999)"}})
+	fns.answer = nil
+
+	// Свежий unknown не сверяется: доход мог ещё не попасть в список.
+	a.receiptPassOnce(ctx)
+	if r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-lost"); fns.lists != 0 || r.State != model.ReceiptUnknown {
+		t.Fatalf("свежий unknown сверен: списков %d, строка %+v", fns.lists, r)
+	}
+	fs.mu.Lock()
+	fs.receipts[model.PayMethodYooKassa+"/yk-lost"].UpdatedAt = time.Now().UTC().Add(-reconcileDelay).Format(time.RFC3339)
+	fs.mu.Unlock()
+
+	a.receiptPassOnce(ctx)
+	r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-lost")
+	if len(fns.calls()) != 1 || r.State != model.ReceiptCreated || r.UUID != "uuid-1" {
+		t.Fatalf("вызовов %d, строка %+v", len(fns.calls()), r)
+	}
+}
+
+// Список доходов полный, а чека в нём нет — ФНС его не приняла: пробиваем
+// заново тем же наименованием с той же меткой.
+func TestReceiptPass_UnknownNotInCompleteListReissued(t *testing.T) {
+	a, _, fs, fns := receiptApp(t)
+	ctx := context.Background()
+	claimRow(t, fs, "yk-gone", "bbb222")
+	setReceiptState(fs, "yk-gone", model.ReceiptUnknown, "")
+
+	a.receiptPassOnce(ctx)
+	r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-gone")
+	calls := fns.calls()
+	if fns.lists != 1 || len(calls) != 1 || calls[0].Name != "VPN (bbb222)" || r.State != model.ReceiptCreated || r.UUID != "uuid-1" {
+		t.Fatalf("списков %d, вызовов %+v, строка %+v", fns.lists, calls, r)
+	}
+}
+
+// Список доходов неполный или не получен — чек остаётся unknown, в ФНС
+// ничего не уходит: «нет в списке» тут ничего не значит.
+func TestReceiptPass_UnknownIncompleteListWaits(t *testing.T) {
+	for name, set := range map[string]func(*fakeFNS){
+		"неполный список": func(f *fakeFNS) { f.incomplete = true },
+		"ошибка списка":   func(f *fakeFNS) { f.listErr = &moynalog.Error{Kind: moynalog.KindRetry, Msg: "status 503"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, _, fs, fns := receiptApp(t)
+			ctx := context.Background()
+			claimRow(t, fs, "yk-wait", "ccc333")
+			setReceiptState(fs, "yk-wait", model.ReceiptUnknown, "")
+			set(fns)
+
+			a.receiptPassOnce(ctx)
+			r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-wait")
+			if fns.lists != 1 || len(fns.calls()) != 0 || r.State != model.ReceiptUnknown || r.LastError == "" {
+				t.Fatalf("списков %d, вызовов %d, строка %+v", fns.lists, len(fns.calls()), r)
+			}
+		})
+	}
+}
+
+// Несколько чеков с одной меткой — автоматика не угадывает: чек остаётся
+// unknown, второй раз не пробивается.
+func TestReceiptPass_UnknownAmbiguousWaits(t *testing.T) {
+	a, _, fs, fns := receiptApp(t)
+	ctx := context.Background()
+	claimRow(t, fs, "yk-amb", "ddd444")
+	setReceiptState(fs, "yk-amb", model.ReceiptUnknown, "")
+	fns.incomes = []moynalog.IncomeRecord{
+		{UUID: "u1", Names: []string{"VPN (ddd444)"}},
+		{UUID: "u2", Names: []string{"VPN (ddd444)"}},
+	}
+	a.receiptPassOnce(ctx)
+	r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-amb")
+	if len(fns.calls()) != 0 || r.State != model.ReceiptUnknown || r.UUID != "" {
+		t.Fatalf("вызовов %d, строка %+v", len(fns.calls()), r)
+	}
+}
+
+// История платежей, перенесённая из старого бота, строк чеков не имеет —
+// проход идёт только по таблице чеков и ничего не пробивает.
+func TestReceiptPass_ImportedHistoryUntouched(t *testing.T) {
+	a, _, fs, fns := receiptApp(t)
+	ctx := context.Background()
+	for _, ext := range []string{"yk-old-1", "yk-old-2"} {
+		if err := fs.AddPayment(ctx, &model.Payment{
+			TelegramID: 555, Method: model.PayMethodYooKassa, Months: 1, Amount: "150.00 RUB",
+			Status: model.PaymentPaid, ExtID: ext, CreatedAt: "2026-01-01T00:00:00Z",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.receiptPassOnce(ctx)
+	a.moneyWG.Wait()
+	if len(fns.calls()) != 0 || fns.lists != 0 || len(fs.receipts) != 0 {
+		t.Fatalf("история породила чеки: вызовов %d, списков %d, строк %d", len(fns.calls()), fns.lists, len(fs.receipts))
+	}
+}
+
+// Отклонённый ФНС чек — один алерт владельцу, сколько бы проходов ни было.
+func TestReceiptAlert_RejectedOnce(t *testing.T) {
+	a, fm, fs, fns := receiptApp(t)
+	ctx := context.Background()
+	fns.answer = fnsRejected
+	if err := a.finalizeTopUp(ctx, 555, 15000, model.PayMethodYooKassa, "150 ₽", "yk-rej"); err != nil {
+		t.Fatal(err)
+	}
+	a.moneyWG.Wait()
+	if n := receiptAlerts(fm); n != 1 {
+		t.Fatalf("алерт об отказе должен уйти сразу и один, ушло %d", n)
+	}
+	a.receiptPassOnce(ctx)
+	a.receiptPassOnce(ctx)
+	r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-rej")
+	if n := receiptAlerts(fm); n != 1 || len(fns.calls()) != 1 || r.AlertedAt == "" {
+		t.Fatalf("алертов %d, вызовов %d, строка %+v", n, len(fns.calls()), r)
+	}
+}
+
+// Отказ, по которому алерт не ушёл (бот упал между записью исхода и
+// алертом), — алерт шлёт проход, тоже один.
+func TestReceiptAlert_RejectedWithoutAlertCaughtByPass(t *testing.T) {
+	a, fm, fs, fns := receiptApp(t)
+	ctx := context.Background()
+	claimRow(t, fs, "yk-rej2", "eee555")
+	setReceiptState(fs, "yk-rej2", model.ReceiptRejected, "")
+	a.receiptPassOnce(ctx)
+	a.receiptPassOnce(ctx)
+	if n := receiptAlerts(fm); n != 1 || len(fns.calls()) != 0 {
+		t.Fatalf("алертов %d, вызовов %d", n, len(fns.calls()))
+	}
+}
+
+// Чек, не ставший created за сутки, — один алерт; попытки при этом
+// продолжаются, и свежий чек алерта не даёт.
+func TestReceiptAlert_StuckOnce(t *testing.T) {
+	a, fm, fs, fns := receiptApp(t)
+	ctx := context.Background()
+	fns.answer = fnsDown
+	claimRow(t, fs, "yk-stuck", "fff666")
+	setReceiptState(fs, "yk-stuck", model.ReceiptPending, time.Now().UTC().Add(-25*time.Hour).Format(time.RFC3339))
+	claimRow(t, fs, "yk-fresh", "ggg777")
+
+	a.receiptPassOnce(ctx)
+	a.receiptPassOnce(ctx)
+	if n := receiptAlerts(fm); n != 1 {
+		t.Fatalf("алертов %d, ожидался один", n)
+	}
+	if n := len(fns.calls()); n != 4 {
+		t.Fatalf("оба чека должны пробоваться на каждом проходе: вызовов %d", n)
+	}
+	fm.mu.Lock()
+	last := fm.texts[len(fm.texts)-1]
+	fm.mu.Unlock()
+	if !strings.Contains(last, "yk-stuck") || !strings.Contains(last, "150") {
+		t.Fatalf("алерт не о том чеке: %q", last)
 	}
 }
