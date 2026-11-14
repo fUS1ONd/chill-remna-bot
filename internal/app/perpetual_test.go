@@ -302,6 +302,25 @@ func TestFormatSubExpire(t *testing.T) {
 	}
 }
 
+// Приветствие бессрочного не зовёт выбрать тариф и оплатить; у обычного —
+// прежний текст (QA B3).
+func TestPerpetualWelcome(t *testing.T) {
+	a, fm := perpetualApp(t, perpetual2099)
+	n := len(fm.texts)
+	a.handleMessage(context.Background(), msgText(perpetualUID, "/start"))
+	out := strings.Join(fm.texts[n:], "\n")
+	if strings.Contains(out, "выбрать тариф") || !strings.Contains(out, "Бессрочная") {
+		t.Errorf("приветствие бессрочного:\n%s", out)
+	}
+
+	a2, fm2 := perpetualApp(t, ordinary2089)
+	n = len(fm2.texts)
+	a2.handleMessage(context.Background(), msgText(perpetualUID, "/start"))
+	if out := strings.Join(fm2.texts[n:], "\n"); !strings.Contains(out, "выбрать тариф") {
+		t.Errorf("приветствие обычного:\n%s", out)
+	}
+}
+
 // Карточка бессрочного у владельца: «Подписка: Бессрочная», а не «активна до
 // Бессрочная»; у обычного — дата (QA B2).
 func TestPerpetualUserCard(t *testing.T) {

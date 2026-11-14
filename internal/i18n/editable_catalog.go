@@ -60,6 +60,11 @@ var editableList = []Editable{
 		Vars: []EditVar{
 			{Name: "name", Ru: "имя", Desc: [2]string{"имя пользователя в Telegram; нет имени — «@username»; нет и его — «друг»", "user's Telegram first name; if none — «@username»; if none either — «друг»"}, Example: [2]string{"Алексей", "Alex"}},
 		}},
+	{Key: "menu.welcome_perpetual", Section: "start", Kind: KindHTML, MaxLen: 900,
+		Where: [2]string{"Приветствие главного меню у пользователя с Бессрочной подпиской, если в «🖼 Баннер» не задан свой текст", "Main-menu greeting for a user with a Perpetual subscription unless a custom text is set in «🖼 Banner»"},
+		Vars: []EditVar{
+			{Name: "name", Ru: "имя", Desc: [2]string{"имя пользователя в Telegram; нет имени — «@username»; нет и его — «друг»", "user's Telegram first name; if none — «@username»; if none either — «друг»"}, Example: [2]string{"Алексей", "Alex"}},
+		}},
 	{Key: "menu.friend", Section: "start", Kind: KindButton,
 		Where: [2]string{"Обращение в приветствии и «Мои подписки», если у пользователя нет ни имени, ни ника", "Form of address in the greeting and «My subscriptions» when the user has neither a name nor a username"}},
 	{Key: "user.need_invite", Section: "start", Kind: KindHTML,

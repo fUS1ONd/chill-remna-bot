@@ -565,7 +565,10 @@ func bannerInputFor(section string) models.InputFile {
 	return &models.InputFileUpload{Filename: "welcome.jpg", Data: bytes.NewReader(defaultBanner)}
 }
 
-func (a *App) welcomeContent(name string) (models.InputFile, string, []models.MessageEntity) {
+// welcomeContent — баннер и подпись главного меню. perpetual — у человека
+// Бессрочная: стандартное приветствие зовёт выбрать тариф и оплатить, ему
+// нечего покупать. Свой текст из «🖼 Баннер» показывается всем.
+func (a *App) welcomeContent(name string, perpetual bool) (models.InputFile, string, []models.MessageEntity) {
 	a.mu.Lock()
 	var w model.WelcomeConfig
 	lang := i18n.Fallback
@@ -590,7 +593,11 @@ func (a *App) welcomeContent(name string) (models.InputFile, string, []models.Me
 	caption := w.Text
 	var ents []models.MessageEntity
 	if caption == "" {
-		caption = i18n.T(lang, "menu.welcome", name)
+		key := "menu.welcome"
+		if perpetual {
+			key = "menu.welcome_perpetual"
+		}
+		caption = i18n.T(lang, key, name)
 	} else if len(w.Entities) > 0 {
 		_ = json.Unmarshal(w.Entities, &ents)
 	}
@@ -607,7 +614,7 @@ func (a *App) showMenu(ctx context.Context, chatID int64, isAdmin bool, name str
 		return
 	}
 	lang := a.botLang()
-	photo, caption, ents := a.welcomeContent(name)
+	photo, caption, ents := a.welcomeContent(name, !isAdmin && a.subPerpetual(ctx, chatID))
 	var rows [][]models.InlineKeyboardButton
 	if isAdmin {
 		caption = i18n.T(lang, "menu.admin_title")

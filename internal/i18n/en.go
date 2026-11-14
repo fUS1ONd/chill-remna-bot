@@ -209,6 +209,7 @@ var en = map[string]string{
 	"admin.input_lost":        "🤔 I am not waiting for any text right now. If this was an answer to an input prompt, the prompt did not survive a bot restart — open that screen again.",
 	"input.not_expected":      "🤔 I am not expecting any text right now. Please use the buttons below.",
 	"menu.welcome":            "👋 <b>Welcome, %s!</b>\n\nThis bot gives you VPN access: pick a plan, pay and get a connection key in a couple of minutes.\n\nChoose an action below.",
+	"menu.welcome_perpetual":  "👋 <b>Welcome, %s!</b>\n\nYou have a Perpetual subscription — nothing to pay. The connection link is in «My subscriptions».\n\nChoose an action below.",
 	"btn.buy":                 "💳 Buy",
 	"btn.status":              "🩺 Status",
 	"btn.p2p":                 "🤝 P2P",
