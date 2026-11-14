@@ -625,6 +625,7 @@ func (a *App) showMenu(ctx context.Context, chatID int64, isAdmin bool, name str
 		case a.canInviteFriends(ctx, chatID):
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.user_invites"), "menu:"+cbUserInvite)})
 		case a.userInvitesOn():
+			// Тумблер включён, а права нет: ни Приглашений, ни ref_.
 		case a.referralCfg().Enabled:
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.referral"), "menu:ref")})
 		}

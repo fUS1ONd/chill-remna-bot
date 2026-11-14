@@ -153,25 +153,7 @@ func (a *App) userInviteBonus(ctx context.Context, chatID int64, lang string) st
 	if !cfg.Enabled || a.subPerpetual(ctx, chatID) {
 		return ""
 	}
-	bonus := i18n.T(lang, "ref.bonus_balance_n", cfg.BonusValue)
-	if cfg.BonusKind == model.ReferralBonusDays {
-		bonus = i18n.T(lang, "ref.bonus_days_n", cfg.BonusValue)
-	}
-	when := i18n.T(lang, "ref.when_pay")
-	if !cfg.OnFirstPay {
-		when = i18n.T(lang, "ref.when_reg")
-	}
-	extra := ""
-	if cfg.InviteeValue > 0 && cfg.InviteeKind != "" {
-		inv := i18n.T(lang, "ref.bonus_balance_n", cfg.InviteeValue)
-		if cfg.InviteeKind == model.ReferralBonusDays {
-			inv = i18n.T(lang, "ref.bonus_days_n", cfg.InviteeValue)
-		}
-		extra += "\n" + i18n.T(lang, "ref.also_friend", inv)
-	}
-	if cfg.Percent > 0 {
-		extra += "\n" + i18n.T(lang, "ref.also_percent", cfg.Percent)
-	}
+	bonus, when, extra := referralTerms(cfg, lang)
 	count, _ := a.store.CountReferrals(ctx, chatID)
 	earned := int64(0)
 	if u, _ := a.store.GetUser(ctx, chatID); u != nil {

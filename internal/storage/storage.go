@@ -2623,10 +2623,10 @@ func (b *base) CreateInvite(ctx context.Context, inv *model.Invite) error {
 	if inv.CreatedAt == "" {
 		inv.CreatedAt = nowStr()
 	}
-	// #nosec G202 -- b.ph выдаёт только placeholder драйвера ($1/?), значения передаются биндовыми параметрами
 	if inv.Grant == "" {
 		inv.Grant = model.InviteGrantAccess
 	}
+	// #nosec G202 -- b.ph выдаёт только placeholder драйвера ($1/?), значения передаются биндовыми параметрами
 	_, err := b.db.ExecContext(ctx,
 		"INSERT INTO invites (code, max_uses, used, expires_at, created_at, revoked, note, created_by, grant_kind) "+
 			"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+")",
