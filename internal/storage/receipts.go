@@ -90,3 +90,10 @@ func (b *base) MarkReceiptAlerted(ctx context.Context, provider, extID string) (
 	n, err := res.RowsAffected()
 	return n > 0, err
 }
+
+func (b *base) UnmarkReceiptAlerted(ctx context.Context, provider, extID string) error {
+	_, err := b.db.ExecContext(ctx,
+		"UPDATE receipts SET alerted_at = '' WHERE provider = "+b.ph(1)+" AND ext_id = "+b.ph(2),
+		provider, extID)
+	return err
+}

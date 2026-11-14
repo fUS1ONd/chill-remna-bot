@@ -1,8 +1,10 @@
 package yookassa
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -171,7 +173,14 @@ func TestGetPaymentCapturedAt(t *testing.T) {
 	if !p.Captured().IsZero() {
 		t.Fatalf("без captured_at момент списания должен быть нулевым: %v", p.Captured())
 	}
-	if !(&Payment{CapturedAt: "вчера"}).Captured().IsZero() {
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(prev)
+	if !(&Payment{ID: "pay-bad", CapturedAt: "вчера"}).Captured().IsZero() {
 		t.Fatal("нечитаемый captured_at должен давать нулевое время")
+	}
+	if s := logBuf.String(); !strings.Contains(s, "level=WARN") || !strings.Contains(s, "pay-bad") {
+		t.Fatalf("нечитаемый captured_at должен уходить в лог предупреждением: %q", s)
 	}
 }

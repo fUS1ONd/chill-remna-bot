@@ -1201,6 +1201,15 @@ func (s *fakeStore) MarkReceiptAlerted(_ context.Context, provider, extID string
 	return true, nil
 }
 
+func (s *fakeStore) UnmarkReceiptAlerted(_ context.Context, provider, extID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.receipts[provider+"/"+extID]; ok {
+		r.AlertedAt = ""
+	}
+	return nil
+}
+
 func (s *fakeStore) PaymentByExtID(_ context.Context, extID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -236,5 +236,16 @@ func TestReceiptOpenAndAlerted(t *testing.T) {
 		if list, _ := st.ListOpenReceipts(ctx, 1); len(list) != 1 {
 			t.Fatalf("лимит выборки: %d", len(list))
 		}
+		// Недоставленный алерт отметку снимает: rejected снова открыт, и
+		// отметка ставится заново.
+		if err := st.UnmarkReceiptAlerted(ctx, model.PayMethodYooKassa, "r"); err != nil {
+			t.Fatal(err)
+		}
+		if got := open(); len(got) != 3 || !got["r"] {
+			t.Fatalf("открытые чеки после снятия отметки: %v", got)
+		}
+		if ok, err := st.MarkReceiptAlerted(ctx, model.PayMethodYooKassa, "r"); err != nil || !ok {
+			t.Fatalf("отметка после снятия: ok=%v err=%v", ok, err)
+		}
 	})
 }

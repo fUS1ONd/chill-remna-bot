@@ -657,6 +657,32 @@ func TestReceiptAlert_RejectedWithoutAlertCaughtByPass(t *testing.T) {
 	}
 }
 
+// Алерт, не принятый Telegram, отметку не оставляет: следующий проход его
+// повторяет, и доставленный — ровно один.
+func TestReceiptAlert_UndeliveredRetried(t *testing.T) {
+	a, fm, fs, _ := receiptApp(t)
+	ctx := context.Background()
+	claimRow(t, fs, "yk-lost", "hhh888")
+	setReceiptState(fs, "yk-lost", model.ReceiptRejected, "")
+	fm.mu.Lock()
+	fm.kbFail = true
+	fm.mu.Unlock()
+	a.receiptPassOnce(ctx)
+	if r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-lost"); r.AlertedAt != "" {
+		t.Fatalf("недоставленный алерт оставил отметку: %+v", r)
+	}
+	fm.mu.Lock()
+	fm.kbFail = false
+	fm.mu.Unlock()
+	before := receiptAlerts(fm)
+	a.receiptPassOnce(ctx)
+	a.receiptPassOnce(ctx)
+	r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-lost")
+	if n := receiptAlerts(fm) - before; n != 1 || r.AlertedAt == "" {
+		t.Fatalf("доставленных алертов %d, строка %+v", n, r)
+	}
+}
+
 // Чек, не ставший created за сутки, — один алерт; попытки при этом
 // продолжаются, и свежий чек алерта не даёт.
 func TestReceiptAlert_StuckOnce(t *testing.T) {

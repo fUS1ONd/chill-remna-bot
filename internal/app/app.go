@@ -1786,14 +1786,14 @@ func hasChat(id int64) bool { return id > 0 }
 
 // Уведомления адресату без чата в Telegram (аккаунт кабинета по почте —
 // отрицательный id) не отправляются вовсе: это только лишний запрос и
-// ошибка «chat not found» в логе.
-func (a *App) notify(ctx context.Context, chatID int64, text string) {
+// ошибка «chat not found» в логе. Результат — принял ли Telegram сообщение.
+func (a *App) notify(ctx context.Context, chatID int64, text string) bool {
 	if !hasChat(chatID) {
-		return
+		return false
 	}
 	id := a.msg.SendKB(ctx, chatID, a.applyPremium(text), [][]models.InlineKeyboardButton{backHomeRow(a.lang(chatID))})
 	if id == 0 {
-		return
+		return false
 	}
 	a.scrMu.Lock()
 	defer a.scrMu.Unlock()
@@ -1806,6 +1806,7 @@ func (a *App) notify(ctx context.Context, chatID int64, text string) {
 		n = n[len(n)-20:]
 	}
 	a.notices[chatID] = n
+	return true
 }
 
 // noticeThen показывает короткое пояснение и сразу под ним экран. Пояснение

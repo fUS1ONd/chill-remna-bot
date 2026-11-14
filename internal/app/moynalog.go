@@ -284,7 +284,8 @@ const receiptStuckAge = 24 * time.Hour
 
 // alertReceiptIfDue шлёт владельцу алерт по чеку, если пора: отклонён ФНС
 // или не пробит дольше суток. Алерт один на чек — отметка в строке ставится
-// до отправки и только если её ещё нет.
+// до отправки и только если её ещё нет. Отметка означает доставленный алерт:
+// не принятое Telegram сообщение её снимает, и алерт повторит следующий проход.
 func (a *App) alertReceiptIfDue(ctx context.Context, r *model.Receipt) {
 	if r.AlertedAt != "" {
 		return
@@ -315,7 +316,13 @@ func (a *App) alertReceiptIfDue(ctx context.Context, r *model.Receipt) {
 	if !ok {
 		return
 	}
-	a.notify(ctx, a.cfg.AdminID, text)
+	if a.notify(ctx, a.cfg.AdminID, text) {
+		return
+	}
+	a.log.Error("moynalog: алерт по чеку не доставлен, повторим следующим проходом", "ext", r.ExtID)
+	if err := a.store.UnmarkReceiptAlerted(ctx, r.Provider, r.ExtID); err != nil {
+		a.log.Error("moynalog: снятие отметки алерта по чеку", "err", err, "ext", r.ExtID)
+	}
 }
 
 const (

@@ -203,6 +203,9 @@ type Storage interface {
 	// MarkReceiptAlerted отмечает алерт владельцу по чеку. false — алерт по
 	// нему уже отмечен раньше.
 	MarkReceiptAlerted(ctx context.Context, provider, extID string) (bool, error)
+	// UnmarkReceiptAlerted снимает отметку алерта: Telegram сообщение не
+	// принял, и алерт повторит следующий проход.
+	UnmarkReceiptAlerted(ctx context.Context, provider, extID string) error
 
 	MostPopularPlan(ctx context.Context) (months int, total int, err error)
 

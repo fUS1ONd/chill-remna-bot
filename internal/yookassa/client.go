@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -136,13 +137,16 @@ type Payment struct {
 }
 
 // Captured — момент списания денег по данным ЮKassa. Нулевое время — ЮKassa
-// его не прислала или прислала нечитаемым.
+// его не прислала или прислала нечитаемым; нечитаемое пишется в лог, чтобы
+// сдвиг даты чека на момент финализации не прошёл молча.
 func (p *Payment) Captured() time.Time {
 	if p == nil || p.CapturedAt == "" {
 		return time.Time{}
 	}
 	t, err := time.Parse(time.RFC3339Nano, p.CapturedAt)
 	if err != nil {
+		slog.Warn("yookassa: нечитаемый captured_at, чек датируется моментом финализации",
+			"payment", p.ID, "captured_at", p.CapturedAt, "err", err)
 		return time.Time{}
 	}
 	return t.UTC()
