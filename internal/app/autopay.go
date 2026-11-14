@@ -96,6 +96,11 @@ func (a *App) saveAutoPayFromPayment(ctx context.Context, chatID int64, months i
 		a.payLog(ctx, model.PayMethodYooKassa, pay.ID, chatID, "error", "автопродление не подключено: в metadata платежа нет срока")
 		return
 	}
+	// Чтение прежней записи и запись новой — под замком человека: иначе
+	// отвязка карты между ними воскресила бы запись включённой.
+	lk := a.autoPayLock(chatID)
+	lk.Lock()
+	defer lk.Unlock()
 	prev := a.getAutoPay(ctx, chatID)
 	// Уже подключено — просто обновляем карту и период, ничего не спрашиваем.
 	alreadyOn := prev != nil && prev.Enabled && prev.MethodID != ""
@@ -536,8 +541,10 @@ func (a *App) chargeAutoPay(ctx context.Context, ap *model.AutoPay, now, exp tim
 	defer lk.Unlock()
 	// Проход по большой базе длится минуты: пользователь мог выключить
 	// автопродление после снятия снапшота ListAutoPay — перечитываем запись
-	// непосредственно перед списанием.
-	if cur := a.getAutoPay(ctx, ap.TelegramID); cur == nil || !cur.Enabled {
+	// непосредственно перед списанием. Карту берём из свежей записи: новая
+	// оплата могла заменить сохранённый способ.
+	cur := a.getAutoPay(ctx, ap.TelegramID)
+	if cur == nil || !cur.Enabled || cur.MethodID == "" {
 		return ""
 	}
 	lang := a.lang(ap.TelegramID)
@@ -612,7 +619,7 @@ func (a *App) chargeAutoPay(ctx context.Context, ap *model.AutoPay, now, exp tim
 	// «вернулся старый платёж по старой цене» сделана проверкой суммы ниже.
 	idem := fmt.Sprintf("ap-%d-%s-%d", ap.TelegramID, autoPayPeriod(exp), ap.Fails)
 	desc := i18n.T(lang, "yk.invoice_desc", months)
-	pay, err := client.ChargeSaved(ctx, ap.MethodID, value, currency, desc, ap.TelegramID, months, snap.Code, idem)
+	pay, err := client.ChargeSaved(ctx, cur.MethodID, value, currency, desc, ap.TelegramID, months, snap.Code, idem)
 	if err != nil {
 		a.payLog(ctx, model.PayMethodYooKassa, "", ap.TelegramID, "autocharge_error", "months=%d: %v", months, err)
 		var apiErr *yookassa.APIError
