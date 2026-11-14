@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"remnabot/internal/i18n"
-	"remnabot/internal/model"
 	"remnabot/internal/remnawave"
 )
 
@@ -75,10 +74,10 @@ func (a *App) grantPerpetual(ctx context.Context, chatID int64) error {
 	return nil
 }
 
-// finishPerpetualInvite — выдача по Безлимит-приглашению после того, как
+// grantPerpetualByInvite — выдача по Безлимит-приглашению после того, как
 // активация списана и Доступ есть. Возвращает текст для человека; при сбое
 // панели владелец получает алерт и выдаёт подписку руками.
-func (a *App) finishPerpetualInvite(ctx context.Context, chatID int64, code string) string {
+func (a *App) grantPerpetualByInvite(ctx context.Context, chatID int64, code string) string {
 	lang := a.lang(chatID)
 	alang := a.lang(a.cfg.AdminID)
 	if err := a.grantPerpetual(ctx, chatID); err != nil {
@@ -92,12 +91,4 @@ func (a *App) finishPerpetualInvite(ctx context.Context, chatID int64, code stri
 	a.log.Info("безлимит: Бессрочная выдана", "tg_id", chatID, "code", code)
 	a.notify(ctx, a.cfg.AdminID, i18n.T(alang, "inv.used_admin", code, a.userLabelByID(ctx, chatID)))
 	return i18n.T(lang, "inv.perpetual_ok")
-}
-
-// inviteGrant — что выдаёт Приглашение, создаваемое мастером владельца.
-func inviteGrant(perpetual bool) string {
-	if perpetual {
-		return model.InviteGrantPerpetual
-	}
-	return model.InviteGrantAccess
 }

@@ -217,7 +217,7 @@ func (a *App) redeemInvite(ctx context.Context, chatID int64, code, username, fi
 			}
 			return i18n.T(lang, "inv.bad"), true
 		}
-		return a.finishPerpetualInvite(ctx, chatID, code), true
+		return a.grantPerpetualByInvite(ctx, chatID, code), true
 	}
 	author := int64(0)
 	if inv != nil {
@@ -263,7 +263,7 @@ func (a *App) redeemInvite(ctx context.Context, chatID int64, code, username, fi
 	}
 	a.log.Info("invite: доступ выдан", "tg_id", chatID, "code", code, "author", author)
 	if inv.Perpetual() {
-		return a.finishPerpetualInvite(ctx, chatID, code), true
+		return a.grantPerpetualByInvite(ctx, chatID, code), true
 	}
 	if author != 0 {
 		a.notifyUserInviteUsed(ctx, author, chatID)
@@ -606,7 +606,10 @@ func (a *App) onAccess(ctx context.Context, chatID int64, val string) {
 		a.showAccess(ctx, chatID)
 	case "new", "newp":
 		ui := a.getUI(chatID)
-		ui.invitePerpetual = action == "newp"
+		ui.inviteGrant = model.InviteGrantAccess
+		if action == "newp" {
+			ui.inviteGrant = model.InviteGrantPerpetual
+		}
 		ui.adminInput = "inv_days"
 		a.askInput(ctx, chatID, i18n.T(lang, "inv.ask_days"), "menu:access")
 	case "list":
@@ -663,12 +666,12 @@ func (a *App) createInviteUses(ctx context.Context, chatID int64, text string) {
 		return
 	}
 	ui := a.getUI(chatID)
-	days, perpetual := ui.inviteDays, ui.invitePerpetual
-	ui.inviteDays, ui.invitePerpetual = 0, false
+	days, grant := ui.inviteDays, ui.inviteGrant
+	ui.inviteDays, ui.inviteGrant = 0, ""
 	if a.store == nil {
 		return
 	}
-	inv := &model.Invite{Code: newInviteCode(), MaxUses: uses, Grant: inviteGrant(perpetual)}
+	inv := &model.Invite{Code: newInviteCode(), MaxUses: uses, Grant: grant}
 	if days > 0 {
 		inv.ExpiresAt = time.Now().UTC().AddDate(0, 0, days).Format(time.RFC3339)
 	}

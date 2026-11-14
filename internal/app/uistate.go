@@ -46,8 +46,8 @@ type uiState struct {
 
 	// Мастер создания приглашения: срок жизни в днях (шаг 1 из 2).
 	inviteDays int
-	// invitePerpetual — мастер создаёт Безлимит-приглашение.
-	invitePerpetual bool
+	// inviteGrant — что выдаёт создаваемое Приглашение (model.InviteGrant*).
+	inviteGrant string
 
 	panelSyncDone bool
 
