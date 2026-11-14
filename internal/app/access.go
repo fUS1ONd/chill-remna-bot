@@ -112,11 +112,20 @@ func (a *App) askCloseMode(ctx context.Context, chatID int64, mode string) {
 
 // accessGranted сообщает, есть ли у пользователя персональный доступ: он в
 // белом списке (в т.ч. после активации приглашения) или добавлен по ID заранее.
+//
+// Аккаунт кабинета по почте (отрицательный синтетический id) получает Доступ
+// Приглашением или одобрением владельца в модерации кабинета (WebApproved);
+// отказ владельца (WebDenied) перекрывает и то и другое — иначе отозванный
+// доступ действовал бы до истечения выданного пропуска.
 func (a *App) accessGranted(ctx context.Context, chatID int64) bool {
 	if a.store == nil {
 		return true
 	}
-	if u, _ := a.store.GetUser(ctx, chatID); u != nil && u.Whitelisted {
+	u, _ := a.store.GetUser(ctx, chatID)
+	if chatID < 0 {
+		return u != nil && !u.WebDenied && (u.Whitelisted || u.WebApproved)
+	}
+	if u != nil && u.Whitelisted {
 		return true
 	}
 	ok, _ := a.store.IsWhitelistID(ctx, chatID)
@@ -137,17 +146,8 @@ func (a *App) MiniAccessDenied(ctx context.Context, tgID int64) bool {
 	if a.store == nil {
 		return false
 	}
-	// E-mail-аккаунты кабинета (отрицательный синтетический id) вайтлистом
-	// Telegram-ID не описываются: их допуском заведует модерация кабинета.
-	// В закрытом боте пускаем тех, кого админ одобрил (WebApproved) — как и
-	// до апгрейда; остальных заворачиваем, CabinetGate отправит их в обычную
-	// очередь на одобрение.
-	if tgID < 0 {
-		u, _ := a.store.GetUser(ctx, tgID)
-		// Отказ учитывается наравне с отсутствием одобрения — иначе отозванный
-		// доступ действовал бы до истечения выданного пропуска.
-		return u == nil || u.WebDenied || !u.WebApproved
-	}
+	// E-mail-аккаунтов без Доступа CabinetGate отправит в обычную очередь на
+	// одобрение.
 	return !a.accessGranted(ctx, tgID)
 }
 
@@ -238,8 +238,10 @@ func (a *App) redeemInvite(ctx context.Context, chatID int64, code, username, fi
 	// Автор становится Пригласившим через логику рефералки, как при
 	// ref_<Автор>. Строго ДО UpsertUser: bindReferrer привязывает только
 	// новичка без строки в базе.
+	// Аккаунту по почте разовые бонусы — только после его оплаты, как при
+	// ref_ по ссылке на кабинет: адреса заводятся бесплатно.
 	if author != 0 {
-		a.bindReferrer(ctx, chatID, refPayload(author), false)
+		a.bindReferrer(ctx, chatID, refPayload(author), chatID < 0)
 	}
 	_ = a.store.UpsertUser(ctx, chatID)
 	a.rememberUser(ctx, chatID, username, firstName)

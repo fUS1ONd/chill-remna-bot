@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"remnabot/internal/i18n"
-
+	"remnabot/internal/model"
 	"remnabot/internal/remnawave"
 )
 
@@ -74,7 +74,10 @@ func (a *App) CabinetBindTelegram(ctx context.Context, tgID, newTgID int64) (int
 	}
 	// Закрытый бот (приглашения/вайтлист): привязка к Telegram, которого бот не
 	// пускает, заперла бы человека снаружи вместе с его оплаченной подпиской.
-	if a.MiniAccessDenied(ctx, newTgID) {
+	// Доступ почтового аккаунта (Приглашение, одобрение владельца) переезжает
+	// вместе с ним, и такому аккаунту Доступ Telegram не нужен.
+	hadAccess := a.accessMode() != model.AccessPublic && !a.MiniAccessDenied(ctx, tgID)
+	if !hadAccess && a.MiniAccessDenied(ctx, newTgID) {
 		return 0, errBindDenied
 	}
 	if u, _ := a.store.GetUser(ctx, newTgID); u != nil && u.Blocked {
@@ -153,6 +156,15 @@ func (a *App) CabinetBindTelegram(ctx context.Context, tgID, newTgID int64) (int
 	if a.cabinetNeedsApproval(false) {
 		if err := a.store.SetWebApproved(ctx, newTgID, true); err != nil {
 			a.log.Warn("привязка Telegram: одобрение не сохранено", "err", err)
+		}
+	}
+
+	// Доступ почтового аккаунта на телеграмном идентификаторе — флаг
+	// белого списка: одобрение модерации кабинета Telegram-аккаунту Доступа
+	// не даёт.
+	if hadAccess && !a.accessGranted(ctx, newTgID) {
+		if err := a.store.SetWhitelisted(ctx, newTgID, true); err != nil {
+			a.log.Warn("привязка Telegram: Доступ не сохранён", "err", err)
 		}
 	}
 

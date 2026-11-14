@@ -105,11 +105,11 @@ var errCabinetAccess = errors.New("доступ к боту ограничен �
 func (a *App) CabinetGate(ctx context.Context, tgID int64, isEmail bool) error {
 	needApproval := a.cabinetNeedsApproval(isEmail)
 	if isEmail {
-		// E-mail-аккаунт не описывается вайтлистом Telegram-ID, поэтому в
-		// закрытом боте (приглашения/вайтлист) для него обязательна модерация
-		// кабинета: ранее одобренные (WebApproved) проходят как раньше,
-		// остальные попадают в обычную очередь на одобрение к админу.
-		if a.accessMode() != model.AccessPublic {
+		// E-mail-аккаунт без Доступа (ни Приглашения, ни одобрения) в закрытом
+		// боте (приглашения/вайтлист) попадает в обычную очередь на одобрение
+		// к админу. С Доступом действует та же модерация кабинета, что и для
+		// входа через Telegram.
+		if a.accessMode() != model.AccessPublic && !a.accessGranted(ctx, tgID) {
 			needApproval = true
 		}
 	} else if a.MiniAccessDenied(ctx, tgID) {
@@ -180,6 +180,10 @@ func (a *App) CabinetEmailRegister(ctx context.Context, email, password, start s
 		if bcrypt.CompareHashAndPassword([]byte(u.PassHash), []byte(password)) != nil {
 			return 0, errCabinetAuth
 		}
+		// Ждущий одобрения аккаунт, пришедший по ссылке с Приглашением,
+		// получает Доступ, как /start inv_ в чате; у кого Доступ уже есть, код
+		// не тратится.
+		a.cabinetEmailInvite(ctx, u.TgID, start)
 		if err := a.CabinetGate(ctx, u.TgID, true); err != nil {
 			return 0, err
 		}
@@ -202,8 +206,11 @@ func (a *App) CabinetEmailRegister(ctx context.Context, email, password, start s
 	// Пришёл по ссылке на кабинет — к пригласившему, как /start в чате. До
 	// заведения строки пользователя: привязка действует только для новичка.
 	// Адрес заводится бесплатно: бонусы такому приглашённому — только после
-	// его оплаты (grantReferralBonus).
-	a.bindReferrer(ctx, tgID, start, true)
+	// его оплаты (grantReferralBonus). Приглашение привязывает Автора само,
+	// тоже до строки пользователя.
+	if !a.cabinetEmailInvite(ctx, tgID, start) {
+		a.bindReferrer(ctx, tgID, start, true)
+	}
 	_ = a.store.UpsertUser(ctx, tgID)
 	// Письмо уходит в фоне и на своём контексте: разговор с почтовым сервером
 	// занимает секунды, а ждать их регистрация не должна — тем более что
@@ -223,6 +230,18 @@ func (a *App) CabinetEmailRegister(ctx context.Context, email, password, start s
 		return 0, err
 	}
 	return tgID, nil
+}
+
+// cabinetEmailInvite активирует Приглашение inv_<код> из ссылки на кабинет для
+// аккаунта по почте и сообщает, был ли в параметре код. Недействительный код
+// ничего не даёт: аккаунт остаётся в очереди на одобрение, как без кода.
+func (a *App) cabinetEmailInvite(ctx context.Context, tgID int64, start string) bool {
+	code, ok := strings.CutPrefix(strings.TrimSpace(start), "inv_")
+	if !ok || code == "" {
+		return false
+	}
+	a.redeemInvite(ctx, tgID, code, "", "")
+	return true
 }
 
 // CabinetEmailLogin verifies email+password and returns the account identity.

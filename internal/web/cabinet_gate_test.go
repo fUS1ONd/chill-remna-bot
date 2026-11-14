@@ -30,6 +30,8 @@ type fakeMini struct {
 	// двойник ручек Приглашений.
 	denied  bool
 	invites []string
+	// tgStart — параметр входа, дошедший до MiniStart.
+	tgStart string
 }
 
 const fakeBotToken = "123456:TESTTOKEN"
@@ -253,6 +255,12 @@ func TestCabinetRegisterPassesStart(t *testing.T) {
 		`{"email":"a@example.com","password":"password1","start":"ref_1000000001"}`, "", "203.0.113.40"))
 	if w.Code != http.StatusOK || f.start != "ref_1000000001" {
 		t.Fatalf("регистрация: code=%d start=%q", w.Code, f.start)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, gateReq(http.MethodPost, "/api/cabinet/auth/register",
+		`{"email":"c@example.com","password":"password1","start":"inv_c1"}`, "", "203.0.113.42"))
+	if w.Code != http.StatusOK || f.start != "inv_c1" {
+		t.Fatalf("регистрация с приглашением: code=%d start=%q", w.Code, f.start)
 	}
 	f.start = ""
 	w = httptest.NewRecorder()

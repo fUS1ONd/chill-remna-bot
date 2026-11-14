@@ -1685,6 +1685,22 @@ func (s *fakeStore) MoveAccount(_ context.Context, from, to int64) error {
 		ap.TelegramID = to
 		s.autopays[to] = ap
 	}
+	for _, inv := range s.invites {
+		if inv.CreatedBy == from {
+			inv.CreatedBy = to
+		}
+	}
+	kept := s.inviteUses[:0]
+	for _, u := range s.inviteUses {
+		switch u.TelegramID {
+		case to:
+			continue
+		case from:
+			u.TelegramID = to
+		}
+		kept = append(kept, u)
+	}
+	s.inviteUses = kept
 	return nil
 }
 

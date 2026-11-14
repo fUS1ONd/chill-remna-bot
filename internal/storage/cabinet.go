@@ -206,6 +206,10 @@ var accountTables = []struct{ table, col string }{
 	// Приглашённые этим аккаунтом: без переноса пригласивший терял их вместе с
 	// процентом с их оплат.
 	{"users", "referred_by"},
+	// Розданные аккаунтом Приглашения: без переноса Автор «исчезал», и они
+	// вставали на паузу. И его собственная активация — для учёта владельца.
+	{"invites", "created_by"},
+	{"invite_uses", "telegram_id"},
 }
 
 // MoveAccount переносит аккаунт с одного идентификатора на другой одной
@@ -227,6 +231,12 @@ func (b *base) MoveAccount(ctx context.Context, from, to int64) error {
 	// первичный ключ users занимает.
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM users WHERE telegram_id = "+b.ph(1), to); err != nil {
+		return err
+	}
+	// Отметки «пришёл по ссылке» целевого номера (открытый бот) тоже ничего не
+	// хранят, а первичный ключ (код, номер) с переезжающей активацией делят.
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM invite_uses WHERE telegram_id = "+b.ph(1), to); err != nil {
 		return err
 	}
 	for _, t := range accountTables {

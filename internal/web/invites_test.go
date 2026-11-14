@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -54,8 +55,15 @@ func containsKey(b []byte, key string) bool {
 	return ok
 }
 
-func (f *fakeMini) MiniStart(context.Context, int64, string, bool) string { return "" }
-func (f *fakeMini) CabinetEnsureUser(context.Context, int64)              {}
+// MiniStart запоминает параметр входа; Приглашение «выдаёт» Доступ.
+func (f *fakeMini) MiniStart(_ context.Context, _ int64, param string, _ bool) string {
+	f.tgStart = param
+	if strings.HasPrefix(param, "inv_") {
+		f.denied = false
+	}
+	return ""
+}
+func (f *fakeMini) CabinetEnsureUser(context.Context, int64) {}
 
 // Вход в кабинет через Telegram без Доступа — тот же признак отказа.
 func TestCabinetTelegramLoginDenied(t *testing.T) {
@@ -123,5 +131,20 @@ func TestInviteEndpoints(t *testing.T) {
 	}
 	if len(f.invites) != 3 {
 		t.Fatalf("без Доступа дошло до приложения: %v", f.invites)
+	}
+}
+
+// Вход в кабинет через Telegram по ссылке с ?inv=: Приглашение гасится до
+// проверки Доступа, и человек входит, а не получает отказ.
+func TestCabinetTelegramLoginInvite(t *testing.T) {
+	f := &fakeMini{denied: true}
+	h := gateServer(t, f)
+	now := time.Now().Unix()
+	fields := map[string]string{"id": "900", "auth_date": strconv.FormatInt(now, 10)}
+	body, _ := json.Marshal(map[string]any{"id": 900, "auth_date": now, "hash": signLogin(fields, fakeBotToken), "start": "inv_c1"})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, gateReq(http.MethodPost, "/api/cabinet/auth/telegram", string(body), "", "203.0.113.71"))
+	if w.Code != http.StatusOK || !containsKey(w.Body.Bytes(), "token") || f.tgStart != "inv_c1" {
+		t.Fatalf("вход с приглашением: %d %s start=%q", w.Code, w.Body.String(), f.tgStart)
 	}
 }
