@@ -161,7 +161,7 @@ func (a *App) expandBroadcastVars(text string, u *model.User, lang string) strin
 		"{username}", escapeName(username),
 		"{id}", strconv.FormatInt(u.TelegramID, 10),
 		"{balance}", html.EscapeString(kopecksToRub(u.Balance)),
-		"{expire}", html.EscapeString(formatExpire(u.SubExpireAt, lang)),
+		"{expire}", html.EscapeString(formatSubExpire(u.SubExpireAt, lang)),
 	).Replace(text)
 }
 

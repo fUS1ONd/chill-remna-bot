@@ -282,6 +282,9 @@ func (a *App) showTopUp(ctx context.Context, chatID int64) {
 }
 
 func (a *App) onTopUp(ctx context.Context, chatID int64, val string) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	action, arg, _ := cut3(val)
 	lang := a.lang(chatID)
 	if !a.topUpEnabled() {
@@ -325,6 +328,9 @@ func (a *App) onTopUp(ctx context.Context, chatID int64, val string) {
 func (a *App) setTopUpCustom(ctx context.Context, chatID int64, text string) {
 	ui := a.getUI(chatID)
 	ui.awaitTopUp = false
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	if !a.topUpEnabled() {
 		a.showBalance(ctx, chatID)
 		return
@@ -426,6 +432,9 @@ func (a *App) showTopUpMethods(ctx context.Context, chatID int64) {
 }
 
 func (a *App) startTopUp(ctx context.Context, chatID int64, method string) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 	if !a.topUpEnabled() {
 		a.showBalance(ctx, chatID)

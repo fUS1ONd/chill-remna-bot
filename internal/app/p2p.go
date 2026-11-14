@@ -285,6 +285,9 @@ func planCurrencyOr(p *model.Plan, fallback string) string {
 const popularThreshold = 10
 
 func (a *App) onBuyPlan(ctx context.Context, chatID int64, val string) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	mo, err := strconv.Atoi(val)
 	if err != nil || !a.periodOnSale(mo) || !a.baseSaleAllowed(ctx, chatID) {
 		// Кнопка витрины присылает только сроки, которые продаются. Всё
@@ -431,6 +434,9 @@ func (a *App) showMethodsSale(ctx context.Context, chatID int64, s *sale) {
 }
 
 func (a *App) onMethod(ctx context.Context, chatID int64, val string) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	// Вторая точка гейта документов: кнопка способа оплаты могла пролежать в
 	// переписке с прошлого раза, а согласие за это время могли сбросить или
 	// гейт включить (тот же порядок, что у гейта доступности тарифа).

@@ -252,3 +252,38 @@ func TestPerpetualNoReminders(t *testing.T) {
 		t.Errorf("обычному платнику напоминание не ушло:\n%s", strings.Join(fm.texts, "\n"))
 	}
 }
+
+// Кнопки срока, способа оплаты и пополнения из старых сообщений бессрочному
+// счёт не выставляют — возвращают в меню.
+func TestPerpetualOldPayButtons(t *testing.T) {
+	a, fm := perpetualApp(t, perpetual2099)
+	a.botCfg.YooKassa.Enabled = true
+	ctx := context.Background()
+	for _, data := range []string{"buy:1", "method:yk", "top:amt:10000", "top:m:yk", "top:custom"} {
+		n, nb := len(fm.texts), len(fm.buttonLabels())
+		a.handleCallback(ctx, cb(perpetualUID, data))
+		out := strings.Join(fm.texts[n:], "\n") + "\n" + strings.Join(fm.buttonLabels()[nb:], "|")
+		if !strings.Contains(out, "Мои подписки") || strings.Contains(out, "₽") {
+			t.Errorf("%s: бессрочный не вернулся в меню:\n%s", data, out)
+		}
+	}
+	// Ожидание своей суммы пополнения, начатое до бессрочности, тоже не
+	// выставляет счёт.
+	a.getUI(perpetualUID).awaitTopUp = true
+	n := len(fm.texts)
+	a.handleMessage(ctx, msgText(perpetualUID, "500"))
+	if out := strings.Join(fm.texts[n:], "\n"); strings.Contains(out, "₽") {
+		t.Errorf("своя сумма пополнения у бессрочного:\n%s", out)
+	}
+}
+
+// Срок в текстах о подписке (привязка учётки, рассылка, карточка в админке):
+// у бессрочной — «Бессрочная», у 2089 — дата.
+func TestFormatSubExpire(t *testing.T) {
+	if got := formatSubExpire(perpetual2099, "ru"); got != "Бессрочная" {
+		t.Errorf("2099: %q", got)
+	}
+	if got := formatSubExpire(ordinary2089, "ru"); !strings.Contains(got, "2090") && !strings.Contains(got, "2089") {
+		t.Errorf("2089: %q", got)
+	}
+}

@@ -645,7 +645,7 @@ func (a *App) registerUser(ctx context.Context, chatID int64, firstName, usernam
 	if a.syncPanelAccount(ctx, chatID) {
 		if u, _ := a.store.GetUser(ctx, chatID); u != nil && u.SubExpireAt != "" {
 			lang := a.lang(chatID)
-			a.notify(ctx, chatID, i18n.T(lang, "sync.linked", formatExpire(u.SubExpireAt, lang)))
+			a.notify(ctx, chatID, i18n.T(lang, "sync.linked", formatSubExpire(u.SubExpireAt, lang)))
 		}
 	}
 	// Согласие при первом входе: новичок — как раз тот, кому документы и

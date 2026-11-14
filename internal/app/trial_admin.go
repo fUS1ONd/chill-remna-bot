@@ -382,13 +382,13 @@ func (a *App) activateTrial(ctx context.Context, chatID int64) {
 	lang := a.lang(chatID)
 	if a.syncPanelAccount(ctx, chatID) {
 		if u, _ := a.store.GetUser(ctx, chatID); u != nil && u.SubExpireAt != "" {
-			a.notify(ctx, chatID, i18n.T(lang, "sync.linked", formatExpire(u.SubExpireAt, lang)))
+			a.notify(ctx, chatID, i18n.T(lang, "sync.linked", formatSubExpire(u.SubExpireAt, lang)))
 		}
 	}
 	link, expireAt, ok, err := a.trialOnce(ctx, chatID)
 	if !ok {
 		if expireAt != "" {
-			a.sendHome(ctx, chatID, i18n.T(lang, "sync.linked", formatExpire(expireAt, lang)))
+			a.sendHome(ctx, chatID, i18n.T(lang, "sync.linked", formatSubExpire(expireAt, lang)))
 			return
 		}
 		a.sendHome(ctx, chatID, i18n.T(lang, "trial.not_available"))
