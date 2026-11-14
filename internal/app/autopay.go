@@ -209,9 +209,12 @@ func (a *App) showAutoPay(ctx context.Context, chatID int64) {
 		rows := [][]models.InlineKeyboardButton{}
 		if ap != nil && ap.MethodID != "" {
 			// Способ оплаты уже сохранён — включаем обратно одной кнопкой.
-			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "ap.btn_on"), "ap:on")}, unlink)
+			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "ap.btn_on"), "ap:on")})
 		} else {
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "ap.btn_buy"), "menu:buy")})
+		}
+		if unlink != nil {
+			rows = append(rows, unlink)
 		}
 		rows = append(rows, back)
 		a.sendKBSection(ctx, chatID, assets.SectionMySubscription, text, rows)
@@ -234,11 +237,11 @@ func (a *App) showAutoPay(ctx context.Context, chatID int64) {
 	if ap.Fails > 0 {
 		text += "\n\n" + i18n.T(lang, "ap.fails", ap.Fails, model.AutoPayMaxFails)
 	}
-	a.sendKBSection(ctx, chatID, assets.SectionMySubscription, text, [][]models.InlineKeyboardButton{
-		{btn(i18n.T(lang, "ap.btn_off"), "ap:off")},
-		unlink,
-		back,
-	})
+	rows := [][]models.InlineKeyboardButton{{btn(i18n.T(lang, "ap.btn_off"), "ap:off")}}
+	if unlink != nil {
+		rows = append(rows, unlink)
+	}
+	a.sendKBSection(ctx, chatID, assets.SectionMySubscription, text, append(rows, back))
 }
 
 // onAutoPayUser обрабатывает пользовательские кнопки автопродления.
@@ -316,7 +319,8 @@ func (a *App) onAutoPayUser(ctx context.Context, chatID int64, val string) {
 // unlinkAutoPay отвязывает карту: запись автопродления удаляется целиком.
 // Берёт тот же замок, что и списание этого человека (autoPayLk): идущее
 // списание доработает до конца, а следующее перечитает запись и не найдёт её —
-// после возврата отсюда списаний гарантированно нет.
+// после возврата отсюда списаний гарантированно нет. Цена — нажатие «Да»
+// может подождать, пока идёт запрос в ЮKassa и продление.
 func (a *App) unlinkAutoPay(ctx context.Context, chatID int64) error {
 	if a.store == nil {
 		return fmt.Errorf("хранилище недоступно")
