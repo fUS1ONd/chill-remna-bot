@@ -101,6 +101,13 @@ func (a *App) saveAutoPayFromPayment(ctx context.Context, chatID int64, months i
 	lk := a.autoPayLock(chatID)
 	lk.Lock()
 	defer lk.Unlock()
+	// Бессрочному продлевать нечего: оплата старого счёта не должна завести
+	// запись, которую Безлимит-приглашение только что удалило, и предложить
+	// автопродление. Проверка под тем же замком, что и выдача Бессрочной.
+	if a.subPerpetual(ctx, chatID) {
+		a.payLog(ctx, model.PayMethodYooKassa, pay.ID, chatID, "autopay_skipped", "Бессрочная подписка — способ оплаты не сохраняем")
+		return
+	}
 	prev := a.getAutoPay(ctx, chatID)
 	// Уже подключено — просто обновляем карту и период, ничего не спрашиваем.
 	alreadyOn := prev != nil && prev.Enabled && prev.MethodID != ""

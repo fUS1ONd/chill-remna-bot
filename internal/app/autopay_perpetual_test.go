@@ -92,3 +92,28 @@ func TestAutoPay_PerpetualCanTurnOff(t *testing.T) {
 		t.Fatalf("отвязка карты бессрочному доступна: %+v", fm.lastKB)
 	}
 }
+
+// Бессрочный оплатил старый счёт с сохранением карты: записи автопродления
+// и предложения его подключить нет.
+func TestAutoPay_PerpetualNotSavedFromPayment(t *testing.T) {
+	const uid = int64(1000000093)
+	a, fs, _ := autoPayPanelApp(t, uid, perpetual2099)
+	fm := a.msg.(*fakeMsg)
+	ctx := context.Background()
+	_ = fs.UpsertUser(ctx, uid)
+	_ = fs.SetSubExpiry(ctx, uid, perpetual2099, "paid")
+
+	pay := &yookassa.Payment{ID: "pay_old"}
+	pay.Metadata = map[string]string{"autopay": "1"}
+	pay.PaymentMethod.ID = "pm_new"
+	pay.PaymentMethod.Saved = true
+	n0 := len(fm.texts)
+	a.saveAutoPayFromPayment(ctx, uid, 1, pay, nil)
+
+	if ap, _ := fs.GetAutoPay(ctx, uid); ap != nil {
+		t.Fatalf("бессрочному создана запись автопродления: %+v", ap)
+	}
+	if len(fm.texts) != n0 {
+		t.Fatalf("бессрочному предложено автопродление: %q", fm.texts[n0:])
+	}
+}
