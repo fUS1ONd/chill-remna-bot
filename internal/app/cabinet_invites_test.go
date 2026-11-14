@@ -206,6 +206,31 @@ func TestCabinetDenied_NoAccess(t *testing.T) {
 	}
 }
 
+// Отклонённый владельцем почтовый аккаунт, вошедший по ссылке с чужим
+// Приглашением, его не тратит: Доступа отказ всё равно не даст, а Автору не
+// приходит ложное «пришёл».
+func TestCabinetDenied_InviteNotSpent(t *testing.T) {
+	a, fm, fs := cabInvApp(t)
+	ctx := context.Background()
+	if _, err := a.CabinetEmailRegister(ctx, "den@example.com", "password1", ""); err == nil {
+		t.Fatal("без кода аккаунт должен ждать одобрения")
+	}
+	wu, _ := fs.GetWebUserByEmail(ctx, "den@example.com")
+	_ = fs.SetWebDenied(ctx, wu.TgID, true)
+	userInvite(t, fs, "c2", uinvAuthor)
+	n0 := len(fm.texts)
+
+	if _, err := a.CabinetEmailRegister(ctx, "den@example.com", "password1", "inv_c2"); err == nil {
+		t.Fatal("отклонённый аккаунт пустили в кабинет")
+	}
+	if inviteUsed(t, fs, "c2") != 0 {
+		t.Fatal("отклонённый аккаунт сжёг чужое Приглашение")
+	}
+	if strings.Contains(strings.Join(fm.texts[n0:], "\n"), "По вашему приглашению пришёл") {
+		t.Fatal("Автору сказано «пришёл», хотя Доступа нет")
+	}
+}
+
 // Явная модерация кабинета для входа по почте действует и с Приглашением —
 // как модерация Telegram-входа для пришедшего по Приглашению в чате: Доступ
 // выдан, но в кабинет пустит одобрение владельца.

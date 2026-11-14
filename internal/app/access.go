@@ -204,6 +204,14 @@ func (a *App) redeemInvite(ctx context.Context, chatID int64, code, username, fi
 	if a.userBlocked(ctx, chatID) {
 		return "", false
 	}
+	// Почтовый аккаунт, отклонённый владельцем, Доступа не получит и по
+	// Приглашению (отказ перекрывает его, см. accessGranted): тратить чужую
+	// активацию и слать Автору «пришёл» незачем.
+	if chatID < 0 {
+		if u, _ := a.store.GetUser(ctx, chatID); u != nil && u.WebDenied {
+			return "", false
+		}
+	}
 	inv, err := a.store.GetInvite(ctx, code)
 	if a.accessGranted(ctx, chatID) {
 		// Доступ уже есть — обычное приглашение не тратим. Безлимит-приглашение
