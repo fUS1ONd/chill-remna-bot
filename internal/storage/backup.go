@@ -880,6 +880,15 @@ func (b *base) restoreBackup(ctx context.Context, open func() (io.Reader, error)
 	if err := b.replayMigrationsTx(ctx, tx, info.Schema); err != nil {
 		return err
 	}
+	// Чек, ждавший ФНС в момент бэкапа, мог быть пробит уже после него:
+	// восстановленный pending пробился бы вторым чеком. Уводим в unknown —
+	// сверка по метке найдёт пробитый или пробьёт заново. При переносе базы
+	// это стоит лишь одной сверки.
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE receipts SET state = "+b.ph(1)+", last_error = "+b.ph(2)+" WHERE state = "+b.ph(3),
+		model.ReceiptUnknown, "восстановлен из бэкапа до пробития — сверка по метке", model.ReceiptPending); err != nil {
+		return fmt.Errorf("чеки после восстановления: %w", err)
+	}
 	return tx.Commit()
 }
 

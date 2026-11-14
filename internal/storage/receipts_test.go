@@ -89,6 +89,33 @@ func TestReceiptMarkSending(t *testing.T) {
 	})
 }
 
+// Бэкап снят, пока чек ждал ФНС; после бэкапа его пробили. Восстановленный
+// pending пробился бы вторым чеком — восстановление уводит его в unknown,
+// на сверку по метке. Прочие состояния не трогаются.
+func TestReceiptRestorePendingBecomesUnknown(t *testing.T) {
+	eachStore(t, func(t *testing.T, st Storage) {
+		ctx := context.Background()
+		if err := st.SaveConfig(ctx, sampleConfig()); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = st.ClaimReceipt(ctx, sampleReceipt(model.PayMethodYooKassa, "pend"))
+		_, _ = st.ClaimReceipt(ctx, sampleReceipt(model.PayMethodYooKassa, "done"))
+		_ = st.SetReceiptResult(ctx, model.PayMethodYooKassa, "done", model.ReceiptCreated, "uuid-1", "")
+		data := backupBytes(t, st)
+		_ = st.SetReceiptResult(ctx, model.PayMethodYooKassa, "pend", model.ReceiptCreated, "uuid-2", "")
+
+		if err := st.RestoreBackup(ctx, opener(data), nil); err != nil {
+			t.Fatal(err)
+		}
+		if r, _ := st.GetReceipt(ctx, model.PayMethodYooKassa, "pend"); r == nil || r.State != model.ReceiptUnknown || r.Marker != "abc123" {
+			t.Fatalf("восстановленный pending: %+v", r)
+		}
+		if r, _ := st.GetReceipt(ctx, model.PayMethodYooKassa, "done"); r == nil || r.State != model.ReceiptCreated || r.UUID != "uuid-1" {
+			t.Fatalf("пробитый чек восстановлен не как был: %+v", r)
+		}
+	})
+}
+
 // Исход каждого обращения к ФНС записывается: состояние, uuid, ошибка, счётчик.
 func TestReceiptResult(t *testing.T) {
 	eachStore(t, func(t *testing.T, st Storage) {
