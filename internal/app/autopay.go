@@ -619,7 +619,7 @@ func (a *App) chargeAutoPay(ctx context.Context, ap *model.AutoPay, now, exp tim
 	stamp := now.Format(time.RFC3339)
 	_ = a.store.MarkAutoPayCharged(ctx, ap.TelegramID, stamp, autoPayPeriod(exp), "", "")
 	amount := pay.Amount.Value + " " + pay.Amount.Currency
-	_, expireAt, err := a.finalizePurchase(ctx, ap.TelegramID, months, model.PayMethodYooKassa, amount, pay.ID, snap)
+	_, expireAt, err := a.finalizePurchaseAt(ctx, ap.TelegramID, months, model.PayMethodYooKassa, amount, pay.ID, snap, pay.Captured())
 	if err != nil {
 		if errors.Is(err, storage.ErrDuplicateExtID) {
 			// Гонку выиграл вебхук — подписка продлена им, повторное сообщение

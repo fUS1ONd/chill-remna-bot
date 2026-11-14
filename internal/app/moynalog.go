@@ -106,6 +106,26 @@ func (a *App) issueReceipt(ctx context.Context, provider, extID string, kopecks 
 	})
 }
 
+// incomeAt — момент дохода для чека: списание денег по данным провайдера, а
+// если провайдер его не сообщил — момент принятия платежа ботом. Бот мог
+// узнать об оплате позже списания (вебхук потерялся, платёж подхватила
+// сверка), а на стыке месяцев это уже другой налоговый период.
+func incomeAt(capturedAt time.Time) time.Time {
+	if capturedAt.IsZero() {
+		return time.Now()
+	}
+	return capturedAt
+}
+
+// capturedStr — момент списания для записи платежа: RFC3339 в UTC, "" —
+// неизвестен.
+func capturedStr(capturedAt time.Time) string {
+	if capturedAt.IsZero() {
+		return ""
+	}
+	return capturedAt.UTC().Format(time.RFC3339)
+}
+
 func receiptKey(provider, extID string) string { return provider + "/" + extID }
 
 // processReceipt доводит застолблённый чек в pending до ФНС — одна попытка.

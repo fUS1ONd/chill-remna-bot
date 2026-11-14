@@ -587,6 +587,12 @@ func (a *App) topUpCreate(ctx context.Context, chatID int64, k int64, method str
 }
 
 func (a *App) finalizeTopUp(ctx context.Context, chatID int64, kopecks int64, method, amount, extID string) error {
+	return a.finalizeTopUpAt(ctx, chatID, kopecks, method, amount, extID, time.Time{})
+}
+
+// finalizeTopUpAt — finalizeTopUp с моментом списания денег по данным
+// провайдера (см. finalizePurchaseAt).
+func (a *App) finalizeTopUpAt(ctx context.Context, chatID int64, kopecks int64, method, amount, extID string, capturedAt time.Time) error {
 	if a.store == nil {
 		return nil
 	}
@@ -613,6 +619,7 @@ func (a *App) finalizeTopUp(ctx context.Context, chatID int64, kopecks int64, me
 	// закрывала счёт.
 	if err := a.store.AddPaymentAndBalance(ctx, &model.Payment{
 		TelegramID: chatID, Method: method, Amount: amount, Status: model.PaymentPaid, ExtID: extID, Comment: "topup",
+		CapturedAt: capturedStr(capturedAt),
 	}, kopecks); err != nil {
 		if errors.Is(err, storage.ErrDuplicateExtID) {
 			a.payLog(ctx, method, extID, chatID, "duplicate", "пополнение уже зачислено")
@@ -622,7 +629,7 @@ func (a *App) finalizeTopUp(ctx context.Context, chatID int64, kopecks int64, me
 		return err
 	}
 	a.payLog(ctx, method, extID, chatID, "topup_credited", "kopecks=%d amount=%s", kopecks, amount)
-	a.issueReceipt(ctx, method, extID, kopecks, "Пополнение баланса", time.Now())
+	a.issueReceipt(ctx, method, extID, kopecks, "Пополнение баланса", incomeAt(capturedAt))
 	if !hasChat(chatID) {
 		return nil
 	}

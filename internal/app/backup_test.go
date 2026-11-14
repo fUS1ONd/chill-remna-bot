@@ -674,7 +674,7 @@ func TestRestoreGuardAfterRestart(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("незакрытые счета после восстановления: %d", len(list))
 	}
-	if b.reconcileFinalize(ctx, st, &list[0], "199.00 RUB") {
+	if b.reconcileFinalize(ctx, st, &list[0], "199.00 RUB", time.Time{}) {
 		t.Fatal("счёт из восстановленной базы выдан автоматически")
 	}
 	b.flushReview(ctx)

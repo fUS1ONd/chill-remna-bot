@@ -629,6 +629,9 @@ type Payment struct {
 	Comment    string
 	ExtID      string
 	CreatedAt  string
+	// CapturedAt — момент списания денег по данным провайдера (RFC3339, UTC);
+	// "" — провайдер его не сообщает. Им датируется чек «Мой налог».
+	CapturedAt string
 
 	// Snapshot — условия, на которых платёж был проведён (см. PlanSnapshot).
 	Snapshot *PlanSnapshot

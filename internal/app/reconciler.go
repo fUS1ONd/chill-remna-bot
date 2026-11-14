@@ -164,7 +164,7 @@ func (a *App) reconcileYooKassa(ctx context.Context, st storage.Storage, pi *mod
 		// Платёж мог быть сделан с сохранением карты: если вебхук не дошёл и
 		// оплату добил реконсилятор, предложение про автопродление всё равно
 		// должно уйти — но ровно один раз, только когда подписка реально выдана.
-		if a.reconcileFinalize(ctx, st, pi, pay.Amount.Value+" "+pay.Amount.Currency) {
+		if a.reconcileFinalize(ctx, st, pi, pay.Amount.Value+" "+pay.Amount.Currency, pay.Captured()) {
 			a.saveAutoPayFromPayment(ctx, pi.TelegramID, pi.Months, pay, pi.Snapshot)
 		}
 	case pay.Status == "canceled":
@@ -192,7 +192,7 @@ func (a *App) reconcileCryptoBot(ctx context.Context, st storage.Storage, pi *mo
 	a.reconLog(ctx, pi, "reconcile", inv.Status, "status=%s", inv.Status)
 	switch inv.Status {
 	case "paid":
-		a.reconcileFinalize(ctx, st, pi, a.cryptoAmount(pi.Snapshot, pi.Months, cbAmount(inv.Asset, inv.Amount, inv.PaidAsset, inv.PaidAmount, inv.Fiat)))
+		a.reconcileFinalize(ctx, st, pi, a.cryptoAmount(pi.Snapshot, pi.Months, cbAmount(inv.Asset, inv.Amount, inv.PaidAsset, inv.PaidAmount, inv.Fiat)), time.Time{})
 	case "expired":
 		_ = st.ResolvePending(ctx, pi.ID)
 	}
@@ -212,7 +212,7 @@ func (a *App) reconcilePlatega(ctx context.Context, st storage.Storage, pi *mode
 	a.reconLog(ctx, pi, "reconcile", tx.Status, "status=%s", tx.Status)
 	switch {
 	case strings.EqualFold(tx.Status, "CONFIRMED"):
-		a.reconcileFinalize(ctx, st, pi, fmt.Sprintf("%.2f %s", tx.Amount, tx.Currency))
+		a.reconcileFinalize(ctx, st, pi, fmt.Sprintf("%.2f %s", tx.Amount, tx.Currency), time.Time{})
 	case strings.EqualFold(tx.Status, "CANCELED") || strings.EqualFold(tx.Status, "CHARGEBACKED"):
 		_ = st.ResolvePending(ctx, pi.ID)
 	}
@@ -232,7 +232,7 @@ func (a *App) reconcileHeleket(ctx context.Context, st storage.Storage, pi *mode
 	a.reconLog(ctx, pi, "reconcile", inv.Status, "status=%s", inv.Status)
 	switch {
 	case heleket.Successful(inv.Status):
-		a.reconcileFinalize(ctx, st, pi, a.hlAmountLabel(inv))
+		a.reconcileFinalize(ctx, st, pi, a.hlAmountLabel(inv), time.Time{})
 	case inv.IsFinal || heleket.Final(inv.Status):
 		// Вебхук мог не дойти — ради этого реконсилятор и нужен, поэтому про
 		// недоплату и AML-заморозку админа зовём и отсюда.
@@ -290,13 +290,14 @@ func (a *App) reconcileYooMoney(ctx context.Context, st storage.Storage, pi *mod
 	a.reconLog(ctx, pi, "reconcile", "paid:"+op.ID, "операция %s зачислена %s RUB при счёте %s", op.ID, yoomoney.FormatSum(op.AmountK()), yoomoney.FormatSum(pi.Kopecks))
 	a.ymReportExtra(ctx, pi.ExtID, extra)
 	// В запись платежа — цена сделки (как у finalizeYooMoney).
-	a.reconcileFinalize(ctx, st, pi, yoomoney.FormatSum(pi.Kopecks)+" RUB")
+	a.reconcileFinalize(ctx, st, pi, yoomoney.FormatSum(pi.Kopecks)+" RUB", time.Time{})
 }
 
 // reconcileFinalize добивает недоставленную оплату. Возвращает true, только
 // если подписка была выдана именно этим вызовом (дубли и ошибки — false), чтобы
 // вызывающий не повторял разовые действия вроде предложения автопродления.
-func (a *App) reconcileFinalize(ctx context.Context, st storage.Storage, pi *model.PendingInvoice, amount string) bool {
+// capturedAt — момент списания по данным провайдера, нулевой — неизвестен.
+func (a *App) reconcileFinalize(ctx context.Context, st storage.Storage, pi *model.PendingInvoice, amount string, capturedAt time.Time) bool {
 	// Счёт из восстановленной базы: его могли оплатить и выдать уже после
 	// даты бэкапа, а восстановленная база этого не знает. Выдать второй раз
 	// нельзя — решает админ.
@@ -327,7 +328,7 @@ func (a *App) reconcileFinalize(ctx context.Context, st storage.Storage, pi *mod
 		return false
 	}
 	if pi.Purpose == "topup" {
-		if err := a.finalizeTopUp(ctx, pi.TelegramID, pi.Kopecks, pi.Method, amount, pi.ExtID); err != nil &&
+		if err := a.finalizeTopUpAt(ctx, pi.TelegramID, pi.Kopecks, pi.Method, amount, pi.ExtID, capturedAt); err != nil &&
 			!errors.Is(err, storage.ErrDuplicateExtID) {
 			a.log.Warn("reconciler: topup", "ext_id", pi.ExtID, "err", err)
 			return false
@@ -335,7 +336,7 @@ func (a *App) reconcileFinalize(ctx context.Context, st storage.Storage, pi *mod
 		_ = st.ResolvePending(ctx, pi.ID)
 		return false
 	}
-	link, expireAt, err := a.finalizePurchase(ctx, pi.TelegramID, pi.Months, pi.Method, amount, pi.ExtID, pi.Snapshot)
+	link, expireAt, err := a.finalizePurchaseAt(ctx, pi.TelegramID, pi.Months, pi.Method, amount, pi.ExtID, pi.Snapshot, capturedAt)
 	if err != nil {
 
 		if errors.Is(err, storage.ErrDuplicateExtID) {

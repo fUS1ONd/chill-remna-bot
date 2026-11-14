@@ -1359,16 +1359,23 @@ func (a *App) pendingSnapshot(ctx context.Context, extID string) *model.PlanSnap
 // текущему конфигу» (так ведут себя пути, где счёта не было, и строки,
 // созданные до появления снимков).
 func (a *App) finalizePurchase(ctx context.Context, telegramID int64, months int, method, amount, extID string, snap *model.PlanSnapshot) (string, string, error) {
+	return a.finalizePurchaseAt(ctx, telegramID, months, method, amount, extID, snap, time.Time{})
+}
+
+// finalizePurchaseAt — finalizePurchase с моментом списания денег по данным
+// провайдера. Он ложится в запись платежа и датирует чек; нулевой — провайдер
+// его не сообщил, и чек датируется моментом принятия платежа.
+func (a *App) finalizePurchaseAt(ctx context.Context, telegramID int64, months int, method, amount, extID string, snap *model.PlanSnapshot, capturedAt time.Time) (string, string, error) {
 	// Доступность тарифа оценивается по состоянию ДО покупки: после неё
 	// человек уже «платил» и уже «на этом тарифе», и гейты «только новым» /
 	// «только действующим» задним числом всегда сходились бы.
 	breach := a.planGateBreach(ctx, telegramID, snapCodeOr(snap, model.PlanCodeBase))
-	link, expireAt, applied, err := a.finalizePurchaseCore(ctx, telegramID, months, method, amount, extID, snap)
+	link, expireAt, applied, err := a.finalizePurchaseCore(ctx, telegramID, months, method, amount, extID, snap, capturedAt)
 	if err == nil {
 		// Чек — после ядра, вне его шардового замка: столбление — запись в
 		// базу, а сам поход в ФНС issueReceipt уводит в фон.
 		a.issueReceipt(ctx, method, extID, int64(math.Round(parseAmountRub(amount)*100)),
-			fmt.Sprintf("Подписка %d мес.", months), time.Now())
+			fmt.Sprintf("Подписка %d мес.", months), incomeAt(capturedAt))
 		// Доп-подписка применяется ПОСЛЕ ядра: это ещё один поход в панель, а
 		// ядро держит шардовый замок финализации — лишний HTTP-раунд под ним
 		// тормозил бы доставку соседних оплат (у предпроверки Stars дедлайн).
@@ -1394,7 +1401,7 @@ func (a *App) finalizePurchase(ctx context.Context, telegramID int64, months int
 	return link, expireAt, err
 }
 
-func (a *App) finalizePurchaseCore(ctx context.Context, telegramID int64, months int, method, amount, extID string, snap *model.PlanSnapshot) (string, string, *model.PlanSnapshot, error) {
+func (a *App) finalizePurchaseCore(ctx context.Context, telegramID int64, months int, method, amount, extID string, snap *model.PlanSnapshot, capturedAt time.Time) (string, string, *model.PlanSnapshot, error) {
 	// Serialize duplicate deliveries of the same payment and bail before we touch
 	// the panel if it's already been finalized (the panel extend happens below,
 	// before the AddPayment idempotency barrier, so without this two concurrent
@@ -1506,19 +1513,20 @@ func (a *App) finalizePurchaseCore(ctx context.Context, telegramID int64, months
 	link = a.rewriteSub(link)
 	a.invalidateSubCache(telegramID)
 	if a.store != nil {
-		err := a.store.AddPayment(ctx, &model.Payment{
+		pay := model.Payment{
 			TelegramID: telegramID, Method: method, Months: months, Amount: amount, Status: model.PaymentPaid, ExtID: extID,
-			Snapshot: snap,
-		})
+			CapturedAt: capturedStr(capturedAt), Snapshot: snap,
+		}
+		rec := pay
+		err := a.store.AddPayment(ctx, &rec)
 		// Запись платежа — барьер идемпотентности: по ней PaymentByExtID решает,
 		// финализировать ли повторно. Транзиентный сбой (database is locked,
 		// обрыв соединения) пробуем пережить повтором.
 		for i := 0; i < 2 && err != nil && !errors.Is(err, storage.ErrDuplicateExtID); i++ {
 			time.Sleep(200 * time.Millisecond)
-			err = a.store.AddPayment(ctx, &model.Payment{
-				TelegramID: telegramID, Method: method, Months: months, Amount: amount, Status: model.PaymentPaid, ExtID: extID,
-				Snapshot: snap,
-			})
+			// Каждая попытка — с чистой копией: AddPayment дописывает в запись id.
+			rec = pay
+			err = a.store.AddPayment(ctx, &rec)
 		}
 		if err != nil {
 			if errors.Is(err, storage.ErrDuplicateExtID) && extID != "" {

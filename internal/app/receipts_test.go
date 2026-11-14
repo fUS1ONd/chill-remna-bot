@@ -262,3 +262,158 @@ func TestReceipt_AutoChargeGetsReceipt(t *testing.T) {
 		t.Fatalf("чек автосписания: вызовов %d, строка %+v", len(fns.calls()), r)
 	}
 }
+
+// ykPayments — ЮKassa, отвечающая на запрос платежа телом из pays по его id
+// (и на создание автосписания — платежом "yk-auto").
+func ykPayments(t *testing.T, pays map[string]string) {
+	t.Helper()
+	yk := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		if r.Method == http.MethodPost {
+			id = "yk-auto"
+		}
+		body, ok := pays[id]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(yk.Close)
+	oldBase := yookassa.BaseURL
+	yookassa.BaseURL = yk.URL
+	t.Cleanup(func() { yookassa.BaseURL = oldBase })
+}
+
+// ykSucceeded — тело подтверждённого платежа ЮKassa; captured="" — без
+// captured_at.
+func ykSucceeded(id, captured string) string {
+	c := ""
+	if captured != "" {
+		c = `,"captured_at":"` + captured + `"`
+	}
+	return `{"id":"` + id + `","status":"succeeded","paid":true,"amount":{"value":"150.00","currency":"RUB"},` +
+		`"metadata":{"months":"1","telegram_id":"555"}` + c + `}`
+}
+
+func paymentByExt(fs *fakeStore, extID string) *model.Payment {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	for _, p := range fs.pays {
+		if p.ExtID == extID {
+			cp := *p
+			return &cp
+		}
+	}
+	return nil
+}
+
+// Оплата, подхваченная сверкой уже в следующем месяце, датируется моментом
+// списания: 31 октября 23:59 по Москве — октябрьский доход, хотя бот узнал о
+// нём в ноябре.
+func TestReceipt_ReconciledLateDatedByCapture(t *testing.T) {
+	const captured = "2026-10-31T20:59:30.512Z" // 23:59:30 МСК
+	ykPayments(t, map[string]string{
+		"yk-late-buy": ykSucceeded("yk-late-buy", captured),
+		"yk-late-top": ykSucceeded("yk-late-top", captured),
+	})
+	a, _, fs, fns := receiptApp(t)
+	ctx := context.Background()
+	a.botCfg.YooKassa = model.YooKassaConfig{Enabled: true, ShopID: "shop", SecretKey: "sec"}
+	created := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339)
+	_ = fs.AddPendingInvoice(ctx, &model.PendingInvoice{
+		Method: model.PayMethodYooKassa, ExtID: "yk-late-buy", TelegramID: 555, Months: 1, CreatedAt: created,
+	})
+	_ = fs.AddPendingInvoice(ctx, &model.PendingInvoice{
+		Method: model.PayMethodYooKassa, ExtID: "yk-late-top", TelegramID: 555, Purpose: "topup", Kopecks: 15000, CreatedAt: created,
+	})
+
+	a.reconcileOnce(ctx)
+	a.moneyWG.Wait()
+
+	moscow := time.FixedZone("MSK", 3*60*60)
+	for _, ext := range []string{"yk-late-buy", "yk-late-top"} {
+		p := paymentByExt(fs, ext)
+		if p == nil || p.CapturedAt != "2026-10-31T20:59:30Z" {
+			t.Fatalf("%s: запись платежа без момента списания: %+v", ext, p)
+		}
+		r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, ext)
+		if r == nil || r.IncomeAt != "2026-10-31T20:59:30Z" {
+			t.Fatalf("%s: чек датирован не списанием: %+v", ext, r)
+		}
+	}
+	calls := fns.calls()
+	if len(calls) != 2 {
+		t.Fatalf("ожидалось два чека, ушло %d", len(calls))
+	}
+	for _, c := range calls {
+		if m := c.OperationTime.In(moscow); m.Month() != time.October || m.Day() != 31 {
+			t.Fatalf("в ФНС ушёл не октябрьский доход: %v", m)
+		}
+	}
+}
+
+// Момент списания из ответа ЮKassa ложится в запись платежа и в чек на каждом
+// пути: вебхук, ручная проверка, автосписание.
+func TestReceipt_CapturedAtOnEveryYooKassaPath(t *testing.T) {
+	const captured = "2026-10-31T20:59:30Z"
+	ykPayments(t, map[string]string{
+		"yk-hook":  ykSucceeded("yk-hook", captured),
+		"yk-check": ykSucceeded("yk-check", captured),
+		"yk-auto":  ykSucceeded("yk-auto", captured),
+	})
+	a, _, fs, _ := receiptApp(t)
+	ctx := context.Background()
+	a.botCfg.YooKassa = model.YooKassaConfig{Enabled: true, ShopID: "shop", SecretKey: "sec", AutoPay: true, AutoPayDays: 1}
+
+	if _, err := a.HandleYooKassaWebhook(ctx, []byte(`{"event":"payment.succeeded","object":{"id":"yk-hook"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	a.onYKCheck(ctx, 555, "yk-check")
+	now := time.Now().UTC()
+	exp := now.Add(12 * time.Hour)
+	_ = fs.SetSubExpiry(ctx, 555, exp.Format(time.RFC3339), "paid")
+	ap := &model.AutoPay{TelegramID: 555, Method: model.PayMethodYooKassa, MethodID: "pm", Months: 1, Enabled: true}
+	_ = fs.SetAutoPay(ctx, ap)
+	if reason := a.chargeAutoPay(ctx, ap, now, exp); reason != "" {
+		t.Fatalf("автосписание не прошло: %s", reason)
+	}
+	a.moneyWG.Wait()
+
+	for _, ext := range []string{"yk-hook", "yk-check", "yk-auto"} {
+		p := paymentByExt(fs, ext)
+		r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, ext)
+		if p == nil || p.CapturedAt != captured || r == nil || r.IncomeAt != captured {
+			t.Fatalf("%s: платёж %+v, чек %+v", ext, p, r)
+		}
+	}
+}
+
+// ЮKassa не прислала captured_at — чек датируется моментом принятия платежа,
+// а в записи платежа момент списания пуст.
+func TestReceipt_NoCapturedAtDatedByAcceptance(t *testing.T) {
+	ykPayments(t, map[string]string{"yk-nocap": ykSucceeded("yk-nocap", "")})
+	a, _, fs, _ := receiptApp(t)
+	ctx := context.Background()
+	a.botCfg.YooKassa = model.YooKassaConfig{Enabled: true, ShopID: "shop", SecretKey: "sec"}
+
+	before := time.Now().UTC().Truncate(time.Second)
+	if _, err := a.HandleYooKassaWebhook(ctx, []byte(`{"event":"payment.succeeded","object":{"id":"yk-nocap"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now().UTC()
+	a.moneyWG.Wait()
+
+	if p := paymentByExt(fs, "yk-nocap"); p == nil || p.CapturedAt != "" {
+		t.Fatalf("запись платежа: %+v", p)
+	}
+	r, _ := fs.GetReceipt(ctx, model.PayMethodYooKassa, "yk-nocap")
+	if r == nil {
+		t.Fatal("чека нет")
+	}
+	at, err := time.Parse(time.RFC3339, r.IncomeAt)
+	if err != nil || at.Before(before) || at.After(after) {
+		t.Fatalf("чек должен датироваться моментом принятия [%v, %v], got %q", before, after, r.IncomeAt)
+	}
+}

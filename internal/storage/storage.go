@@ -856,9 +856,9 @@ func (b *base) AddPayment(ctx context.Context, p *model.Payment) error {
 	// Столкновение id — не дубль сделки, а невезение с часами: пробуем новый.
 	for attempt := 0; ; attempt++ {
 		_, err := b.db.ExecContext(ctx,
-			"INSERT INTO payments (id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot) "+
-				"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+", "+b.ph(10)+")",
-			p.ID, p.TelegramID, p.Method, p.Months, p.Amount, p.Status, p.Comment, p.ExtID, p.CreatedAt, p.Snapshot.Encode())
+			"INSERT INTO payments (id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot, captured_at) "+
+				"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+", "+b.ph(10)+", "+b.ph(11)+")",
+			p.ID, p.TelegramID, p.Method, p.Months, p.Amount, p.Status, p.Comment, p.ExtID, p.CreatedAt, p.Snapshot.Encode(), p.CapturedAt)
 		switch {
 		case err == nil:
 			return nil
@@ -934,9 +934,9 @@ func (b *base) AddPaymentAndBalance(ctx context.Context, p *model.Payment, kopec
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO payments (id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot) "+
-			"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+", "+b.ph(10)+")",
-		p.ID, p.TelegramID, p.Method, p.Months, p.Amount, p.Status, p.Comment, p.ExtID, p.CreatedAt, p.Snapshot.Encode()); err != nil {
+		"INSERT INTO payments (id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot, captured_at) "+
+			"VALUES ("+b.ph(1)+", "+b.ph(2)+", "+b.ph(3)+", "+b.ph(4)+", "+b.ph(5)+", "+b.ph(6)+", "+b.ph(7)+", "+b.ph(8)+", "+b.ph(9)+", "+b.ph(10)+", "+b.ph(11)+")",
+		p.ID, p.TelegramID, p.Method, p.Months, p.Amount, p.Status, p.Comment, p.ExtID, p.CreatedAt, p.Snapshot.Encode(), p.CapturedAt); err != nil {
 		if isExtIDDuplicate(err) {
 			return ErrDuplicateExtID
 		}
@@ -1030,7 +1030,7 @@ func (b *base) ListPayments(ctx context.Context, limit, offset int) ([]model.Pay
 	for rows.Next() {
 		var p model.Payment
 		var snapRaw string
-		if err := rows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw); err != nil {
+		if err := rows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw, &p.CapturedAt); err != nil {
 			return nil, 0, err
 		}
 		p.Snapshot = model.DecodePlanSnapshot(snapRaw)
@@ -1090,7 +1090,7 @@ func (b *base) PaidPayments(ctx context.Context) ([]model.Payment, error) {
 	for rows.Next() {
 		var p model.Payment
 		var snapRaw string
-		if err := rows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw); err != nil {
+		if err := rows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw, &p.CapturedAt); err != nil {
 			return nil, err
 		}
 		p.Snapshot = model.DecodePlanSnapshot(snapRaw)
@@ -1141,7 +1141,7 @@ func (b *base) DeleteMediaFileID(ctx context.Context, section string) error {
 // несколько запросов, и расхождение между SELECT и Scan ловится только в
 // рантайме.
 const (
-	paymentCols = "id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot"
+	paymentCols = "id, telegram_id, method, months, amount, status, comment, ext_id, created_at, plan_snapshot, captured_at"
 	p2pCols     = "id, telegram_id, months, price, status, screenshot, comment, created_at, decided_at, plan_snapshot, card, purpose, kopecks"
 	autoPayCols = "telegram_id, method, method_id, title, months, amount, currency, enabled, created_at, " +
 		"last_pay_at, paid_period, next_try_at, fails, last_error, plan_snapshot"
@@ -1348,7 +1348,7 @@ func (b *base) LastPaidSubPayment(ctx context.Context, telegramID int64) (*model
 		"SELECT "+paymentCols+" FROM payments WHERE telegram_id = "+b.ph(1)+
 			" AND status = "+b.ph(2)+subPaymentCond+" ORDER BY created_at DESC, id DESC LIMIT 1",
 		telegramID, model.PaymentPaid).
-		Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw)
+		Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw, &p.CapturedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1490,7 +1490,7 @@ func (b *base) Export(ctx context.Context) (*Snapshot, error) {
 	for prows.Next() {
 		var p model.Payment
 		var snapRaw string
-		if err := prows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw); err != nil {
+		if err := prows.Scan(&p.ID, &p.TelegramID, &p.Method, &p.Months, &p.Amount, &p.Status, &p.Comment, &p.ExtID, &p.CreatedAt, &snapRaw, &p.CapturedAt); err != nil {
 			_ = prows.Close()
 			return nil, err
 		}
