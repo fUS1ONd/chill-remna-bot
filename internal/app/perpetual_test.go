@@ -301,3 +301,22 @@ func TestFormatSubExpire(t *testing.T) {
 		t.Errorf("2089: %q", got)
 	}
 }
+
+// Карточка бессрочного у владельца: «Подписка: Бессрочная», а не «активна до
+// Бессрочная»; у обычного — дата (QA B2).
+func TestPerpetualUserCard(t *testing.T) {
+	a, fm := perpetualApp(t, perpetual2099)
+	n := len(fm.texts)
+	a.handleCallback(context.Background(), cb(100, "usr:view:"+itoa64(perpetualUID)))
+	out := strings.Join(fm.texts[n:], "\n")
+	if !strings.Contains(out, "📦 Подписка: <b>Бессрочная</b>") || strings.Contains(out, "активна до") {
+		t.Errorf("карточка бессрочного:\n%s", out)
+	}
+
+	a2, fm2 := perpetualApp(t, ordinary2089)
+	n = len(fm2.texts)
+	a2.handleCallback(context.Background(), cb(100, "usr:view:"+itoa64(perpetualUID)))
+	if out := strings.Join(fm2.texts[n:], "\n"); !strings.Contains(out, "Подписка активна до") {
+		t.Errorf("карточка обычного:\n%s", out)
+	}
+}

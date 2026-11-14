@@ -296,6 +296,7 @@ var en = map[string]string{
 		"🗑 «Delete» will ask whether to remove from the bot only or together with the panel subscription (only this user's account is deleted).",
 	"user.active":         "active ✅",
 	"user.sub_active":     "📦 Subscription active until <b>%s</b>\nLink (tap to copy):\n<code>%s</code>",
+	"user.sub_perpetual":  "📦 Subscription: <b>Perpetual</b>\nLink (tap to copy):\n<code>%s</code>",
 	"user.sub_blocked":    "🛑 Subscription is blocked in the panel (DISABLED).\nLink:\n<code>%s</code>",
 	"user.no_sub":         "📭 No active subscription in the panel.",
 	"user.plan":           "🏷 Last plan: <b>%s</b>",

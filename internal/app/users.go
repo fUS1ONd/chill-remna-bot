@@ -449,9 +449,13 @@ func (a *App) showUser(ctx context.Context, chatID, uid int64) {
 		if url, exp, st, ok := panel.SubscriptionFull(ctx, uid); ok {
 			subExists = true
 			subBlocked = st == remnawave.StatusDisabled
-			if subBlocked {
+			switch {
+			case subBlocked:
 				subBlock = i18n.T(lang, "user.sub_blocked", a.rewriteSub(url))
-			} else {
+			case perpetualExpiry(exp):
+				// «активна до Бессрочная» не по-русски: у бессрочной своя строка.
+				subBlock = i18n.T(lang, "user.sub_perpetual", a.rewriteSub(url))
+			default:
 				subBlock = i18n.T(lang, "user.sub_active", formatSubExpire(exp, lang), a.rewriteSub(url))
 			}
 		}
