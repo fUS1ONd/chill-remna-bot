@@ -191,12 +191,16 @@ func (a *App) autoPayDaysText(lang string) string {
 // showAutoPay — пользовательский экран автопродления: что это, когда спишется,
 // и кнопка выключения/включения.
 func (a *App) showAutoPay(ctx context.Context, chatID int64) {
-	if a.perpetualHome(ctx, chatID) {
-		return
-	}
 	lang := a.lang(chatID)
 	ap := a.getAutoPay(ctx, chatID)
 	on := ap != nil && ap.Enabled && ap.MethodID != ""
+	// Бессрочному экран нужен, только чтобы выключить автопродление и отвязать
+	// карту (их могли подключить до Бессрочной); включить его нельзя.
+	perpetual := a.subPerpetual(ctx, chatID)
+	if perpetual && (ap == nil || ap.MethodID == "") {
+		a.perpetualHome(ctx, chatID)
+		return
+	}
 	back := []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), "menu:mysubs"), btn(i18n.T(lang, "btn.home"), "menu:home")}
 
 	// Отвязка доступна, пока способ оплаты сохранён: даже если магазин
@@ -218,10 +222,12 @@ func (a *App) showAutoPay(ctx context.Context, chatID int64) {
 	if !on {
 		text := i18n.T(lang, "ap.off_title", a.autoPayDaysText(lang))
 		rows := [][]models.InlineKeyboardButton{}
-		if ap != nil && ap.MethodID != "" {
+		switch {
+		case perpetual:
+		case ap != nil && ap.MethodID != "":
 			// Способ оплаты уже сохранён — включаем обратно одной кнопкой.
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "ap.btn_on"), "ap:on")})
-		} else {
+		default:
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "ap.btn_buy"), "menu:buy")})
 		}
 		if unlink != nil {
@@ -551,6 +557,17 @@ func (a *App) chargeAutoPay(ctx context.Context, ap *model.AutoPay, now, exp tim
 	// оплата могла заменить сохранённый способ.
 	cur := a.getAutoPay(ctx, ap.TelegramID)
 	if cur == nil || !cur.Enabled || cur.MethodID == "" {
+		return ""
+	}
+	// Бессрочным человека делает и сдвиг срока в панели (docs/adr/0003), а в
+	// базе бота срок при этом старый — по нему autoPayDue и решил списывать.
+	// Платить больше не за что: автопродление выключаем, карту оставляем —
+	// отвязать её человек может сам.
+	if a.subPerpetual(ctx, ap.TelegramID) {
+		if a.store != nil {
+			_ = a.store.SetAutoPayEnabled(ctx, ap.TelegramID, false)
+		}
+		a.payLog(ctx, model.PayMethodYooKassa, "", ap.TelegramID, "autopay_off", "Бессрочная подписка — списывать не за что")
 		return ""
 	}
 	lang := a.lang(ap.TelegramID)
