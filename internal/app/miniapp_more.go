@@ -171,6 +171,9 @@ func (a *App) MiniPlanLink(ctx context.Context, tgID int64, code string) web.Min
 		a.planLinkFail(tgID)
 		return unknown
 	}
+	if a.subPerpetual(ctx, tgID) {
+		return web.MiniPlansDTO{Notice: stripHTMLTags(i18n.T(lang, "mini.perpetual"))}
+	}
 	if expireAt, locked := a.trialBuyLock(ctx, tgID); locked {
 		return web.MiniPlansDTO{Notice: stripHTMLTags(i18n.T(lang, "buy.trial_locked_plain", formatExpire(expireAt, lang)))}
 	}
@@ -198,7 +201,7 @@ func (a *App) MiniPlanLink(ctx context.Context, tgID int64, code string) web.Min
 
 // MiniWallet — кошелёк: баланс и доступно ли пополнение.
 func (a *App) MiniWallet(ctx context.Context, tgID int64) web.MiniWalletDTO {
-	return web.MiniWalletDTO{TopUpOn: a.topUpEnabled(), BalanceK: a.userBalance(ctx, tgID)}
+	return web.MiniWalletDTO{TopUpOn: a.topUpEnabled() && !a.subPerpetual(ctx, tgID), BalanceK: a.userBalance(ctx, tgID)}
 }
 
 // MiniPayCheck — «Проверить оплату» из мини-аппа и кабинета: незакрытые счета

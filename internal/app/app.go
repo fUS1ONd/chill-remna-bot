@@ -409,8 +409,11 @@ func (a *App) spawn(f func()) {
 }
 
 type subCacheEntry struct {
-	has      bool
-	expireAt time.Time
+	has bool
+	// subExpire — срок окончания подписки из панели (RFC3339), по нему
+	// узнаётся Бессрочная подписка.
+	subExpire string
+	expireAt  time.Time
 }
 
 func New(cfg *config.Config, crypter *crypto.Crypter, log *slog.Logger) *App {

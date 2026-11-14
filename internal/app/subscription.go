@@ -11,6 +11,9 @@ import (
 
 func (a *App) subActiveText(ctx context.Context, chatID int64, link, expireAt string) string {
 	lang := a.lang(chatID)
+	if perpetualExpiry(expireAt) {
+		return i18n.T(lang, "sub.active_perpetual", a.displayNameByID(ctx, chatID), link, link)
+	}
 	return i18n.T(lang, "sub.active", a.displayNameByID(ctx, chatID), formatExpire(expireAt, lang), link, link)
 }
 

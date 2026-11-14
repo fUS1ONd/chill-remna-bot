@@ -66,6 +66,7 @@ func (a *App) MiniMenu(ctx context.Context, tgID int64, web_ bool) web.MiniMenuD
 	}
 	dto.OwnPlan, dto.RenewNote, dto.RenewGone = a.ownPlanView(ctx, tgID, a.lang(tgID))
 	dto.Legal = a.miniLegalDocs(tgID)
+	dto.Perpetual = a.subPerpetual(ctx, tgID)
 	if len(dto.Legal) > 0 {
 		cfgLegal := a.legalCfg()
 		dto.LegalOnPay = cfgLegal.OnPay
@@ -111,6 +112,12 @@ func (a *App) MiniMenu(ctx context.Context, tgID int64, web_ bool) web.MiniMenuD
 	// Названия и описания способов — те же, что в чате (правятся в «Тексты
 	// бота»); страница без них показывает свои встроенные.
 	dto.PayLabels, dto.PayNotes = payMethodWebTexts(a.lang(tgID))
+	if dto.Perpetual {
+		// Как navRow в чате: бессрочному платить не за что.
+		dto.CanRenew, dto.TrialAvailable, dto.TopUpOn = false, false, false
+		dto.OwnPlan, dto.RenewNote, dto.RenewGone = "", "", false
+		dto.PayMethods = nil
+	}
 	return dto
 }
 
@@ -138,13 +145,14 @@ func (a *App) MiniSubscription(ctx context.Context, tgID int64) web.MiniSubDTO {
 	if !snap.NextReset.IsZero() {
 		dto.TrafficResetTS = snap.NextReset.Unix()
 	}
-	dto.ExpireAt = formatExpire(expireAt, a.lang(tgID))
+	dto.Perpetual = perpetualExpiry(expireAt)
+	dto.ExpireAt = formatSubExpire(expireAt, a.lang(tgID))
 	// Тариф — только у живой подписки, как в чате: у истёкшей, исчерпанной
 	// и заблокированной там отдельный экран без него.
 	if !strings.EqualFold(snap.Status, remnawave.StatusDisabled) && subDeadKey(snap.Status, expireAt) == "" {
 		dto.PlanTitle = a.clientPlanTitle(ctx, a.lang(tgID), tgID)
 	}
-	if t, err := time.Parse(time.RFC3339, expireAt); err == nil {
+	if t, err := time.Parse(time.RFC3339, expireAt); err == nil && !dto.Perpetual {
 		dto.ExpireTS = t.Unix()
 	}
 	if info, dok := panel.DevicesByTelegramID(ctx, tgID); dok {
@@ -165,7 +173,7 @@ func (a *App) MiniSubscription(ctx context.Context, tgID int64) web.MiniSubDTO {
 	}
 	// Same add-on state the chat screen shows, so the mini-app and the cabinet
 	// don't hide a доп-сервер that ran out of traffic.
-	if add, aok := a.addSubStatus(ctx, tgID); aok {
+	if add, aok := a.addSubStatus(ctx, tgID); aok && !dto.Perpetual {
 		dto.AddSubOK = true
 		dto.AddSubUsed = add.Used
 		dto.AddSubLimit = add.Limit
@@ -181,6 +189,9 @@ func (a *App) MiniSubscription(ctx context.Context, tgID int64) web.MiniSubDTO {
 // покупателю, каждый со своими сроками и условиями.
 func (a *App) MiniPlans(ctx context.Context, tgID int64) web.MiniPlansDTO {
 	var dto web.MiniPlansDTO
+	if a.subPerpetual(ctx, tgID) {
+		return dto
+	}
 	// Гейт триала — тот же, что в чате: пока триал идёт, витрина закрыта,
 	// чтобы его дни не сгорали (админ может разрешить покупку тумблером).
 	if expireAt, locked := a.trialBuyLock(ctx, tgID); locked {
@@ -326,6 +337,9 @@ func (a *App) miniPlanDTO(ctx context.Context, tgID int64, p *model.Plan, pc min
 // MiniTrial activates the free trial (mirrors activateTrial's core). Read of
 // availability uses the same predicate as the chat bot.
 func (a *App) MiniTrial(ctx context.Context, tgID int64) web.MiniActionDTO {
+	if r, no := a.miniPerpetualRefused(ctx, tgID); no {
+		return r
+	}
 	// Как activateTrial в чате: сначала найти аккаунт, заведённый в панели
 	// раньше бота, — у такого человека триала быть не должно.
 	a.syncPanelAccount(ctx, tgID)
@@ -403,6 +417,9 @@ func (a *App) MiniLegalRequired(ctx context.Context, tgID int64) bool {
 // completes in-app (reuses finalizePurchase, the same provisioning core as
 // the chat flow); other methods return a payment URL or Redirect=true.
 func (a *App) MiniCheckout(ctx context.Context, tgID int64, plan string, months int, method string, shownPrice string, web_, p2pInApp bool) web.MiniActionDTO {
+	if r, no := a.miniPerpetualRefused(ctx, tgID); no {
+		return r
+	}
 	if expireAt, locked := a.trialBuyLock(ctx, tgID); locked {
 		lang := a.lang(tgID)
 		return web.MiniActionDTO{Error: stripHTMLTags(i18n.T(lang, "buy.trial_locked_plain", formatExpire(expireAt, lang)))}

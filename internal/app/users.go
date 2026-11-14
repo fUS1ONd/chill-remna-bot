@@ -440,7 +440,7 @@ func (a *App) showUser(ctx context.Context, chatID, uid int64) {
 			if subBlocked {
 				subBlock = i18n.T(lang, "user.sub_blocked", a.rewriteSub(url))
 			} else {
-				subBlock = i18n.T(lang, "user.sub_active", formatExpire(exp, lang), a.rewriteSub(url))
+				subBlock = i18n.T(lang, "user.sub_active", formatSubExpire(exp, lang), a.rewriteSub(url))
 			}
 		}
 	}
@@ -1152,7 +1152,9 @@ func (a *App) showMySubs(ctx context.Context, chatID int64) {
 	// пытаясь починить, и теряли настроенные клиенты. Кнопки «Продлить» на
 	// этом экране не было вообще ни при каком статусе.
 	if key := subDeadKey(status, expireAt); key != "" {
-		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.renew"), "menu:renew")})
+		if !perpetualExpiry(expireAt) {
+			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.renew"), "menu:renew")})
+		}
 		if row := a.autoPayRow(ctx, chatID, lang); row != nil {
 			rows = append(rows, row)
 		}
@@ -1182,6 +1184,9 @@ func (a *App) showMySubs(ctx context.Context, chatID int64) {
 // off, the user has no add-on, or the panel can't be read — the screen then
 // looks exactly as before.
 func (a *App) addSubLine(ctx context.Context, chatID int64) string {
+	if a.subPerpetual(ctx, chatID) {
+		return ""
+	}
 	info, ok := a.addSubStatus(ctx, chatID)
 	if !ok {
 		return ""

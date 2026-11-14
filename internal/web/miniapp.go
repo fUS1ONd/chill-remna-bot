@@ -294,7 +294,11 @@ type CabinetAccountDTO struct {
 // MiniMenuDTO mirrors navRow predicates so the front-end shows exactly the
 // actions the chat bot would show this user.
 type MiniMenuDTO struct {
-	HasSub         bool `json:"has_sub"`
+	HasSub bool `json:"has_sub"`
+	// Perpetual — у человека Бессрочная подписка: сервер уже убрал покупку,
+	// продление, триал, автопродление и пополнение, а фронт по нему прячет
+	// ещё и кошелёк.
+	Perpetual      bool `json:"perpetual,omitempty"`
 	CanRenew       bool `json:"can_renew"`
 	TrialAvailable bool `json:"trial_available"`
 	ReferralOn     bool `json:"referral_on"`
@@ -342,7 +346,10 @@ type MiniLegalDTO struct {
 }
 
 type MiniSubDTO struct {
-	Active      bool   `json:"active"`
+	Active bool `json:"active"`
+	// Perpetual — Бессрочная подписка: ExpireAt — «Бессрочная», ExpireTS не
+	// присылается, «осталось N дней» фронт не рисует.
+	Perpetual   bool   `json:"perpetual,omitempty"`
 	Status      string `json:"status"`
 	ExpireAt    string `json:"expire_at"`
 	ExpireTS    int64  `json:"expire_ts,omitempty"`

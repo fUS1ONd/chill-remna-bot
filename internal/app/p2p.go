@@ -132,6 +132,9 @@ func (a *App) p2pAllowedFor(tgID int64, u *model.User) bool {
 // видимый тариф открывается сразу карточкой (без лишнего клика — так живёт
 // типичная установка с одним «Базовым»).
 func (a *App) showPlans(ctx context.Context, chatID int64) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 
 	if a.trialLockNotice(ctx, chatID) {

@@ -320,7 +320,7 @@ func (a *App) MiniPromo(ctx context.Context, tgID int64, code string) web.MiniPr
 // plus the enabled top-up methods (YooKassa/CryptoBot/Heleket).
 func (a *App) MiniTopUpOptions(ctx context.Context, tgID int64) web.MiniTopUpOptionsDTO {
 	var dto web.MiniTopUpOptionsDTO
-	if !a.topUpEnabled() {
+	if !a.topUpEnabled() || a.subPerpetual(ctx, tgID) {
 		return dto
 	}
 	amts, maxK := a.topUpAmounts(ctx)
@@ -337,6 +337,9 @@ func (a *App) MiniTopUpOptions(ctx context.Context, tgID int64) web.MiniTopUpOpt
 // and returns the payment URL. Сумма — пресет или своя, с тем же потолком, что
 // у произвольной суммы в чате (setTopUpCustom).
 func (a *App) MiniTopUp(ctx context.Context, tgID int64, kopecks int64, method string, web_ bool) web.MiniActionDTO {
+	if r, no := a.miniPerpetualRefused(ctx, tgID); no {
+		return r
+	}
 	if !a.topUpEnabled() {
 		return web.MiniActionDTO{Error: stripHTMLTags(i18n.T(a.lang(tgID), "topup.disabled"))}
 	}
@@ -362,6 +365,10 @@ func (a *App) MiniTopUp(ctx context.Context, tgID int64, kopecks int64, method s
 
 // MiniAutoPay отдаёт состояние автопродления для мини-аппа и веб-кабинета.
 func (a *App) MiniAutoPay(ctx context.Context, tgID int64) web.MiniAutoPayDTO {
+	if a.subPerpetual(ctx, tgID) {
+		// Бессрочную не продлевают: блока автопродления фронт не рисует.
+		return web.MiniAutoPayDTO{Days: a.autoPayCfg().AutoPayDays}
+	}
 	available, on, months, title := a.AutoPayState(ctx, tgID)
 	dto := web.MiniAutoPayDTO{
 		Available: available,
@@ -378,6 +385,11 @@ func (a *App) MiniAutoPay(ctx context.Context, tgID int64) web.MiniAutoPayDTO {
 
 // MiniSetAutoPay включает/выключает автопродление из мини-аппа или кабинета.
 func (a *App) MiniSetAutoPay(ctx context.Context, tgID int64, on bool) web.MiniActionDTO {
+	if on {
+		if r, no := a.miniPerpetualRefused(ctx, tgID); no {
+			return r
+		}
+	}
 	if err := a.SetAutoPayEnabled(ctx, tgID, on); err != nil {
 		return web.MiniActionDTO{Error: stripHTMLTags(a.clientErr(ctx, tgID, "мини-апп", err))}
 	}

@@ -547,7 +547,7 @@ function brandHTML(big){
   return '<span'+cls+' style="display:flex;align-items:center;gap:10px;min-width:0">'+h+(name?'<span class="nm">'+esc(name)+'</span>':'')+'</span>';
 }
 function paintBrand(){document.getElementById('brand').innerHTML=brandHTML(false);}
-function paintBalance(){var b=document.getElementById('bal');if(TOKEN&&STATE.me){b.style.display='inline-flex';b.innerHTML=IC.wallet+esc(rub(STATE.balanceK));}else{b.style.display='none';b.innerHTML='';}}
+function paintBalance(){var b=document.getElementById('bal');if(TOKEN&&STATE.me&&!(STATE.menu&&STATE.menu.perpetual)){b.style.display='inline-flex';b.innerHTML=IC.wallet+esc(rub(STATE.balanceK));}else{b.style.display='none';b.innerHTML='';}}
 
 /* ---------- API ---------- */
 function mkErr(st,m){var e=new Error(m||('HTTP '+st));e.status=st;return e;}
@@ -617,7 +617,8 @@ function renderSide(on){
   var h='<div class="sbrand" onclick="goHome()">'+brandHTML(false)+'</div>';
   h+=it('home',IC.bolt,T('home'),'goHome()');
   if(STATE.plans.length)h+=it('plans',IC.tag,T('plans'),'navTo(\'plans\')');
-  h+=it('wallet',IC.wallet,T('wallet'),'navTo(\'wallet\')',rub(STATE.balanceK));
+  // Бессрочному кошелёк не нужен: начислять на него нечего, платить не за что.
+  if(!m.perpetual)h+=it('wallet',IC.wallet,T('wallet'),'navTo(\'wallet\')',rub(STATE.balanceK));
   if(s.sub_url)h+=it('connect',IC.download,T('conn_title'),'navTo(\'connect\')');
   if(s.active)h+=it('devices',IC.device,T('devices_title'),'navTo(\'devices\')',s.devices_ok?(s.has_limit?(s.devices_used+' / '+s.device_limit):String(s.devices_used)):'');
   if(m.referral_on)h+=it('ref',IC.gift,T('ref'),'navTo(\'ref\')');
@@ -691,7 +692,7 @@ function subCard(){
   if(s.active){
     h+='<div class="card sub"><div class="st"><span class="lbl">'+esc(T('sub'))+'</span>'+statusBadge(s)+'</div>';
     if(s.expire_ts){var dl=daysLeft(s.expire_ts);h+='<div class="days"><b>'+dl+'</b><span>'+esc(daysW(dl))+' '+esc(T('days_left'))+'</span></div><div class="muted small">'+esc(T('until'))+' '+esc(dateS(s.expire_ts))+'</div>';}
-    else if(s.expire_at)h+='<div class="h2" style="margin-top:10px">'+esc(T('until'))+' '+esc(s.expire_at)+'</div>';
+    else if(s.expire_at)h+='<div class="h2" style="margin-top:10px">'+(s.perpetual?'':esc(T('until'))+' ')+esc(s.expire_at)+'</div>';
     var meta='';
     if(s.plan_title)meta+='<span>'+esc(T('plan_cur'))+': <b>'+esc(s.plan_title)+'</b></span>';
     if(s.devices_ok)meta+='<span>'+esc(T('devices'))+': <b>'+esc(s.has_limit?(s.devices_used+' / '+s.device_limit):String(s.devices_used))+'</b></span>';
@@ -725,7 +726,7 @@ function apBlock(){
 function homeList(){
   var m=STATE.menu||{},s=STATE.sub||{},h='<div class="list">';
   if(STATE.plans.length)h+=item(IC.bolt,T('plans'),'','','openPlans()');
-  h+=item(IC.wallet,T('wallet'),'',rub(STATE.balanceK),'go(\'wallet\')');
+  if(!m.perpetual)h+=item(IC.wallet,T('wallet'),'',rub(STATE.balanceK),'go(\'wallet\')');
   if(m.referral_on)h+=item(IC.gift,T('ref'),'','','go(\'ref\')');
   h+=item(IC.tag,T('promo'),'','','go(\'promo\')');
   if(s.active)h+=item(IC.device,T('devices_title'),'',s.devices_ok?(s.has_limit?(s.devices_used+' / '+s.device_limit):String(s.devices_used)):'','go(\'devices\')');

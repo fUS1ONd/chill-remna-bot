@@ -492,7 +492,10 @@ function renderSide(){
   var h='<div class="sbrand"><span class="lg">'+IC.bolt+'</span>Личный кабинет</div>';
   h+=item('home',IC.layers,'Главная','boot()');
   if((STATE.plans&&STATE.plans.length)||STATE.plansNotice)h+=item('plans',IC.tag,'Тарифы','openPlans()');
-  h+=item('wallet',IC.wallet,'Кошелёк','openMore()',esc(rub(STATE.balanceK))+' ₽');
+  // Бессрочному кошелёк не нужен: начислять на него нечего, платить не за что.
+  // Экран тот же, но на нём остаётся только «Пригласить друга».
+  if(!m.perpetual)h+=item('wallet',IC.wallet,'Кошелёк','openMore()',esc(rub(STATE.balanceK))+' ₽');
+  else if(m.referral_on)h+=item('wallet',IC.gift,'Пригласить друга','openMore()');
   if(sub.sub_url)h+=item('connect',IC.download,'Подключение','openConnect()');
   h+=item('account',IC.users,'Аккаунт','openAccount()');
   if(m.support_url||m.group_url){
@@ -652,7 +655,7 @@ function passHTML(sub){
       '<div class="pl"><span class="brand">'+(sub.plan_title?'ТАРИФ · '+esc(String(sub.plan_title).toUpperCase()):'ДОСТУП · BOARDING')+'</span>'+(dead?'<span class="pstat '+dead.c+'"><span class="dot off"></span>'+dead.t+'</span>':'<span class="pstat"><span class="dot"></span>активно</span>')+'</div>'+
       '<div class="route"><span class="pt">Ты</span><span class="ln"></span><span class="pic">'+IC.plane+'</span><span class="ln"></span><span class="pt">Сеть</span></div></div>'+
       '<div class="perf"></div><div class="stub'+(dleft!==null&&dtext!==null&&atext!==null?' n4':'')+'">'+
-        '<div class="c"><div class="k">ДО</div><div class="v">'+esc(dshort)+'</div></div>'+
+        '<div class="c"><div class="k">'+(sub.perpetual?'СРОК':'ДО')+'</div><div class="v">'+esc(dshort)+'</div></div>'+
         (dleft!==null?'<div class="c"><div class="k">ОСТАЛОСЬ</div><div class="v">'+dleft+' '+daysWord(dleft)+'</div></div>':'')+
         (dtext!==null?'<div class="c"><div class="k">УСТРОЙСТВА</div><div class="v">'+esc(dtext)+'</div></div>':'')+
         (atext!==null?'<div class="c"><div class="k">'+esc((sub.addsub_name||'Доп-сервер').toUpperCase())+'</div><div class="v">'+esc(atext)+'</div></div>':'')+
@@ -1165,7 +1168,9 @@ async function openMore(){
   haptic('tap');skSimple();setBack(boot);
   var ref={enabled:false};
   try{ref=await api('/api/miniapp/referral');}catch(e){}
-  var h='<div class="stagger"><div class="card hero glow"><div class="top"><span class="status">'+IC.wallet+' Баланс</span></div>'+
+  var h='<div class="stagger">';
+  // Бессрочному баланс не показываем: кошелька у него нет.
+  if(!(STATE.menu&&STATE.menu.perpetual))h+='<div class="card hero glow"><div class="top"><span class="status">'+IC.wallet+' Баланс</span></div>'+
     '<div class="title">'+rub(STATE.balanceK)+' ₽</div>'+
     (topupOn()?'<button class="btn" style="margin-top:14px" onclick="topupOpen()">'+IC.plus+'Пополнить баланс</button>':'')+
     '<div class="hint" style="margin-top:12px">Баланс тратится только на подписку. Вывод средств невозможен.</div></div>';
@@ -1734,8 +1739,8 @@ async function boot(){
     if(WEB){try{STATE.acct=await api('/api/cabinet/account');}catch(e){STATE.acct=null;}}
     STATE.me_id=me.tg_id||0;loadAva();
     STATE.balanceK=me.balance_kopecks||0; STATE.methods=menu.pay_methods||[]; STATE.menu=menu; STATE.lang=me.lang||'ru'; STATE.me_name=me.name||''; STATE.me_email=me.email||''; STATE.me_subexp=me.sub_expire||'';
-    balchip.style.display='inline-flex';
-    balchip.innerHTML=IC.wallet+rub(STATE.balanceK)+' ₽';
+    balchip.style.display=menu.perpetual?'none':'inline-flex';
+    balchip.innerHTML=menu.perpetual?'':IC.wallet+rub(STATE.balanceK)+' ₽';
     NOFX=true;render(me,menu,sub,plans);NOFX=false;
     // Ссылка ждёт согласия с документами на входе: после «Принимаю» boot()
     // вызовется снова. В кабинете она до тех пор лежит в localStorage и

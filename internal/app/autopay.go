@@ -165,6 +165,9 @@ func (a *App) saveAutoPayFromPayment(ctx context.Context, chatID int64, months i
 // этого пользователя (выключить его должно быть можно всегда, в том числе когда
 // подписка уже кончилась или заблокирована).
 func (a *App) autoPayRow(ctx context.Context, chatID int64, lang string) []models.InlineKeyboardButton {
+	if a.subPerpetual(ctx, chatID) {
+		return nil
+	}
 	on := a.autoPayOn(ctx, chatID)
 	if !a.autoPayAvailable() && !on {
 		return nil
@@ -188,6 +191,9 @@ func (a *App) autoPayDaysText(lang string) string {
 // showAutoPay — пользовательский экран автопродления: что это, когда спишется,
 // и кнопка выключения/включения.
 func (a *App) showAutoPay(ctx context.Context, chatID int64) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 	ap := a.getAutoPay(ctx, chatID)
 	on := ap != nil && ap.Enabled && ap.MethodID != ""
@@ -268,7 +274,7 @@ func (a *App) onAutoPayUser(ctx context.Context, chatID int64, val string) {
 			})
 	case "on":
 		ap := a.getAutoPay(ctx, chatID)
-		if ap == nil || ap.MethodID == "" || !a.autoPayAvailable() {
+		if ap == nil || ap.MethodID == "" || !a.autoPayAvailable() || a.subPerpetual(ctx, chatID) {
 			a.showAutoPay(ctx, chatID)
 			return
 		}

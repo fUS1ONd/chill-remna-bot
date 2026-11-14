@@ -167,7 +167,14 @@ func (a *App) payReferralBonus(ctx context.Context, telegramID int64, atPay bool
 	// поэтому там платим и метим несмотря на неудачу у пригласившего.
 	retryLater := atPay
 	granted := true
-	if cfg.BonusValue > 0 {
+	// Бессрочному Пригласившему бонус не положен: дни ему не нужны, а
+	// кошелька у него нет. Это не неудача — выплата считается сделанной, и
+	// друг свой бонус получает.
+	refPerpetual := a.subPerpetual(ctx, ref)
+	if refPerpetual {
+		a.log.Info("реферальный бонус не начислен: Пригласивший бессрочный", "ref", ref, "invitee", telegramID)
+	}
+	if cfg.BonusValue > 0 && !refPerpetual {
 		switch cfg.BonusKind {
 		case model.ReferralBonusDays:
 			ok, found := a.addReferralDays(ctx, ref, cfg.BonusValue)
@@ -251,6 +258,10 @@ func (a *App) creditReferralPercent(ctx context.Context, telegramID int64, amoun
 		return
 	}
 	ref := u.ReferredBy
+	// Бессрочному Пригласившему процент не начисляется: кошелька у него нет.
+	if a.subPerpetual(ctx, ref) {
+		return
+	}
 	if err := a.store.AddBalance(ctx, ref, earn); err != nil {
 		return
 	}

@@ -77,6 +77,9 @@ func (a *App) userBalance(ctx context.Context, chatID int64) int64 {
 }
 
 func (a *App) showBalance(ctx context.Context, chatID int64) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 	bal := a.userBalance(ctx, chatID)
 	caption := i18n.T(lang, "balance.head", kopecksToRub(bal))
@@ -251,6 +254,9 @@ func (a *App) topUpAmounts(ctx context.Context) ([]int64, int64) {
 }
 
 func (a *App) showTopUp(ctx context.Context, chatID int64) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 	if !a.topUpEnabled() {
 		a.showBalance(ctx, chatID)

@@ -146,12 +146,19 @@ func plainName(s string) string {
 const subCacheTTL = 30
 
 func (a *App) userHasSub(ctx context.Context, chatID int64) bool {
+	has, _, _ := a.subCached(ctx, chatID)
+	return has
+}
 
+// subCached — есть ли у человека подписка в панели и её срок окончания, с
+// кэшем на subCacheTTL. known=false — панель не ответила ни разу (или её нет):
+// тогда has=false, а срок неизвестен.
+func (a *App) subCached(ctx context.Context, chatID int64) (has bool, expire string, known bool) {
 	a.subMu.Lock()
 	if a.subCache != nil {
 		if e, ok := a.subCache[chatID]; ok && time.Now().Before(e.expireAt) {
 			a.subMu.Unlock()
-			return e.has
+			return e.has, e.subExpire, true
 		}
 	}
 	a.subMu.Unlock()
@@ -160,32 +167,31 @@ func (a *App) userHasSub(ctx context.Context, chatID int64) bool {
 	panel := a.panel
 	a.mu.Unlock()
 	if panel == nil {
-		return false
+		return false, "", false
 	}
-	_, _, _, has, err := panel.SubscriptionState(ctx, chatID)
+	_, exp, _, has, err := panel.SubscriptionState(ctx, chatID)
 	if err != nil {
 		// Панель молчит — это НЕ «подписки нет». Отрицательный ответ при
 		// аварии кэшировался на полминуты и переживал возвращение панели:
 		// платящий клиент полминуты видел «у вас нет подписок, купите».
 		// Отдаём последнее известное значение и ничего не запоминаем.
 		a.subMu.Lock()
-		last := false
+		defer a.subMu.Unlock()
 		if a.subCache != nil {
 			if e, ok := a.subCache[chatID]; ok {
-				last = e.has
+				return e.has, e.subExpire, true
 			}
 		}
-		a.subMu.Unlock()
-		return last
+		return false, "", false
 	}
 
 	a.subMu.Lock()
 	if a.subCache == nil {
 		a.subCache = map[int64]subCacheEntry{}
 	}
-	a.subCache[chatID] = subCacheEntry{has: has, expireAt: time.Now().Add(subCacheTTL * time.Second)}
+	a.subCache[chatID] = subCacheEntry{has: has, subExpire: exp, expireAt: time.Now().Add(subCacheTTL * time.Second)}
 	a.subMu.Unlock()
-	return has
+	return has, exp, true
 }
 
 func (a *App) invalidateSubCache(chatID int64) {
@@ -199,6 +205,11 @@ func (a *App) invalidateSubCache(chatID int64) {
 func (a *App) navRow(ctx context.Context, chatID int64) []models.InlineKeyboardButton {
 	lang := a.lang(chatID)
 	var row []models.InlineKeyboardButton
+	// Бессрочную не покупают и не продлевают, а кошелёк ей не нужен: на него
+	// приходят только реферальные начисления, а их бессрочному нет.
+	if a.subPerpetual(ctx, chatID) {
+		return append(row, btn(i18n.T(lang, "btn.mysubs"), "menu:mysubs"))
+	}
 	if a.userHasSub(ctx, chatID) {
 		row = append(row, btn(i18n.T(lang, "btn.mysubs"), "menu:mysubs"))
 		if a.renewEligible(ctx, chatID) {
@@ -215,7 +226,7 @@ func (a *App) navRow(ctx context.Context, chatID int64) []models.InlineKeyboardB
 }
 
 func (a *App) renewEligible(ctx context.Context, chatID int64) bool {
-	if a.store == nil {
+	if a.store == nil || a.subPerpetual(ctx, chatID) {
 		return false
 	}
 	u, _ := a.store.GetUser(ctx, chatID)

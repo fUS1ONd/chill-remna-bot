@@ -102,6 +102,9 @@ func (a *App) planLink(ctx context.Context, code string) string {
 // выключенный тариф и тариф, недоступный этому покупателю, снаружи выглядят
 // одинаково, иначе ссылки перебором подтверждали бы существование тарифов.
 func (a *App) openPlanLink(ctx context.Context, chatID int64, code string) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 	if a.planLinkThrottled(chatID) || a.planLinkGlobalBlocked(ctx, chatID) {
 		// Лимит перебора: молчим. Легитимный человек с опечаткой уже пять раз
@@ -390,6 +393,9 @@ func devicesValue(lang string, v devShown) string {
 // и тот же единый отказ, что у ссылки: callback подделываем, а список — не
 // допуск к скрытому.
 func (a *App) onPlanView(ctx context.Context, chatID int64, code string) {
+	if a.perpetualHome(ctx, chatID) {
+		return
+	}
 	lang := a.lang(chatID)
 	if a.planLinkThrottled(chatID) || a.planLinkGlobalBlocked(ctx, chatID) {
 		// Ответ тот же, что у обычного отказа. Молчание отличало бы
