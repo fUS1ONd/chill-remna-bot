@@ -45,7 +45,7 @@ func (a *App) perpetualHome(ctx context.Context, chatID int64) bool {
 	if !a.subPerpetual(ctx, chatID) {
 		return false
 	}
-	a.showMenu(ctx, chatID, false, a.displayNameByID(ctx, chatID))
+	a.showMenu(ctx, chatID, chatID == a.cfg.AdminID, a.displayNameByID(ctx, chatID))
 	return true
 }
 

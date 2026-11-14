@@ -277,6 +277,20 @@ func TestPerpetualOldPayButtons(t *testing.T) {
 	}
 }
 
+// Владелец с Бессрочной подпиской, нажавший старую кнопку покупки, попадает в
+// своё меню — с админкой, а не в меню клиента.
+func TestPerpetualHome_OwnerKeepsAdminMenu(t *testing.T) {
+	a, fm := perpetualApp(t, perpetual2099)
+	a.cfg.AdminID = perpetualUID
+	n := len(fm.texts)
+	if !a.perpetualHome(context.Background(), perpetualUID) {
+		t.Fatal("бессрочного владельца не вернули в меню")
+	}
+	if out := strings.Join(fm.texts[n:], "\n"); !strings.Contains(out, "Админ-панель") {
+		t.Fatalf("владельцу показано меню клиента:\n%s", out)
+	}
+}
+
 // Срок в текстах о подписке (привязка учётки, рассылка, карточка в админке):
 // у бессрочной — «Бессрочная», у 2089 — дата.
 func TestFormatSubExpire(t *testing.T) {
