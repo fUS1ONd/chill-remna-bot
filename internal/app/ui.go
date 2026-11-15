@@ -225,6 +225,30 @@ func (a *App) navRow(ctx context.Context, chatID int64) []models.InlineKeyboardB
 	return row
 }
 
+// splitBalance убирает кнопку Кошелька из ряда навигации: в главном меню
+// она встаёт парой ко второстепенным кнопкам.
+func splitBalance(row []models.InlineKeyboardButton) (nav, extra []models.InlineKeyboardButton) {
+	for _, b := range row {
+		if b.CallbackData == "menu:balance" {
+			extra = append(extra, b)
+			continue
+		}
+		nav = append(nav, b)
+	}
+	return nav, extra
+}
+
+// packMenuRows раскладывает второстепенные кнопки главного меню по две в
+// ряд в исходном порядке; нечётная последняя занимает ряд целиком.
+func packMenuRows(btns []models.InlineKeyboardButton) [][]models.InlineKeyboardButton {
+	var rows [][]models.InlineKeyboardButton
+	for i := 0; i < len(btns); i += 2 {
+		end := min(i+2, len(btns))
+		rows = append(rows, btns[i:end:end])
+	}
+	return rows
+}
+
 func (a *App) renewEligible(ctx context.Context, chatID int64) bool {
 	if a.store == nil || a.subPerpetual(ctx, chatID) {
 		return false
@@ -622,24 +646,30 @@ func (a *App) showMenu(ctx context.Context, chatID int64, isAdmin bool, name str
 		rows = a.adminMenuRows(lang)
 		photo = bannerInputFor(assets.SectionAdminStats)
 	} else {
-		rows = append(rows, a.navRow(ctx, chatID))
-		if row := a.miniAppButtonRow(lang); row != nil {
+		// Форк: меню собирается плотнее — Кошелёк уходит из первого ряда к
+		// второстепенным кнопкам, и они идут парами (packMenuRows).
+		nav, extra := splitBalance(a.navRow(ctx, chatID))
+		rows = append(rows, nav)
+		if row := a.miniAppMenuRow(lang); row != nil {
 			rows = append(rows, row)
 		}
 		// С Приглашениями от пользователей «Пригласить друга» заменяет
 		// рефералку: ref_-ссылка в этом режиме не показывается.
 		switch {
 		case a.canInviteFriends(ctx, chatID):
-			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.user_invites"), "menu:"+cbUserInvite)})
+			extra = append(extra, btn(i18n.T(lang, "btn.user_invites"), "menu:"+cbUserInvite))
 		case a.userInvitesOn():
 			// Тумблер включён, а права нет: ни Приглашений, ни ref_.
 		case a.referralCfg().Enabled:
-			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.referral"), "menu:ref")})
+			extra = append(extra, btn(i18n.T(lang, "btn.referral"), "menu:ref"))
 		}
 		if row := a.legalMenuRow(lang); row != nil {
-			rows = append(rows, row)
+			extra = append(extra, row...)
 		}
-		rows = append(rows, a.contactRows()...)
+		for _, row := range a.contactRows() {
+			extra = append(extra, row...)
+		}
+		rows = append(rows, packMenuRows(extra)...)
 	}
 	if len(ents) == 0 {
 		caption = a.applyPremium(caption)

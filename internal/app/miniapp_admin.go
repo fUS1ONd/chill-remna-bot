@@ -105,6 +105,22 @@ func (a *App) miniAppButtonRow(lang string) []models.InlineKeyboardButton {
 	if !on {
 		return nil
 	}
+	return a.miniAppButton(lang)
+}
+
+// miniAppMenuRow — кнопка мини-аппа для главного меню: её можно убрать
+// настройкой, когда мини-апп открывается кнопкой меню чата.
+func (a *App) miniAppMenuRow(lang string) []models.InlineKeyboardButton {
+	a.mu.Lock()
+	hidden := a.botCfg != nil && a.botCfg.MiniApp.HideMenuButton
+	a.mu.Unlock()
+	if hidden {
+		return nil
+	}
+	return a.miniAppButtonRow(lang)
+}
+
+func (a *App) miniAppButton(lang string) []models.InlineKeyboardButton {
 	url := a.miniAppURL()
 	if url == "" {
 		return nil

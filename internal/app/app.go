@@ -700,7 +700,7 @@ func (a *App) Run(ctx context.Context) error {
 	if err != nil {
 		up = nil
 	}
-	a.msg = botMessenger{b: b, log: a.log, up: up}
+	a.msg = botMessenger{b: b, log: a.log, up: up, icons: a.buttonIcons}
 	a.sendHealNotice(ctx)
 	a.sendTextsNotice(ctx)
 	a.prunePlanAccess(ctx)
@@ -2070,6 +2070,17 @@ func (a *App) premiumMap() map[string]string {
 	return out
 }
 
+// buttonIcons — карта значков для кнопок, если владелец их включил.
+func (a *App) buttonIcons() map[string]string {
+	a.mu.Lock()
+	on := a.botCfg != nil && a.botCfg.PremiumButtons
+	a.mu.Unlock()
+	if !on {
+		return nil
+	}
+	return a.premiumMap()
+}
+
 func (a *App) applyPremium(text string) string {
 	return applyPremiumEmoji(text, a.premiumMap())
 }
@@ -2080,6 +2091,33 @@ type botMessenger struct {
 	// up — тот же бот с долгим таймаутом: загрузка файла бэкапа в 50 МБ
 	// по медленному каналу не укладывается в минуту основного клиента.
 	up *bot.Bot
+	// icons — карта «эмодзи → премиум-эмодзи» для значков кнопок; nil или
+	// пустая карта — кнопки уходят как есть.
+	icons func() map[string]string
+}
+
+// kb — клавиатура на выход: значки премиум-эмодзи, затем укладка по ширине
+// (значок занимает место, поэтому укладка идёт после).
+func (m botMessenger) kb(rows [][]models.InlineKeyboardButton) [][]models.InlineKeyboardButton {
+	if m.icons != nil {
+		rows = iconizeKeyboard(rows, m.icons())
+	}
+	return fitKeyboard(rows)
+}
+
+// markup — то же для разметки, переданной целиком.
+func (m botMessenger) markup(rm models.ReplyMarkup) models.ReplyMarkup {
+	switch kb := rm.(type) {
+	case models.InlineKeyboardMarkup:
+		kb.InlineKeyboard = m.kb(kb.InlineKeyboard)
+		return kb
+	case *models.InlineKeyboardMarkup:
+		if kb == nil {
+			return rm
+		}
+		return &models.InlineKeyboardMarkup{InlineKeyboard: m.kb(kb.InlineKeyboard)}
+	}
+	return rm
 }
 
 func (m botMessenger) Send(ctx context.Context, chatID int64, text string) int {
@@ -2136,7 +2174,7 @@ func (m botMessenger) SendKB(ctx context.Context, chatID int64, text string, row
 // Сбой сети или 5xx не значат, что сообщение не дошло, и повтор дал бы дубль.
 // Рассылке дубль хуже недоставки; уведомлениям по-прежнему важнее дойти.
 func (m botMessenger) sendKBErr(ctx context.Context, chatID int64, text string, rows [][]models.InlineKeyboardButton, strict bool) (int, error) {
-	rows = fitKeyboard(rows)
+	rows = m.kb(rows)
 	params := &bot.SendMessageParams{ChatID: chatID, Text: text, ParseMode: models.ParseModeHTML, ProtectContent: protectedCtx(ctx)}
 	if len(rows) > 0 {
 		params.ReplyMarkup = models.InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -2175,7 +2213,7 @@ func (m botMessenger) sendKBErr(ctx context.Context, chatID int64, text string, 
 }
 
 func (m botMessenger) SendEnt(ctx context.Context, chatID int64, text string, entities []models.MessageEntity, rows [][]models.InlineKeyboardButton) int {
-	rows = fitKeyboard(rows)
+	rows = m.kb(rows)
 	params := &bot.SendMessageParams{ChatID: chatID, Text: text, Entities: entities, ProtectContent: protectedCtx(ctx)}
 	if len(rows) > 0 {
 		params.ReplyMarkup = models.InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -2203,7 +2241,7 @@ func (m botMessenger) SendEnt(ctx context.Context, chatID int64, text string, en
 }
 
 func (m botMessenger) SendPhoto(ctx context.Context, chatID int64, fileID, caption string, rows [][]models.InlineKeyboardButton) int {
-	rows = fitKeyboard(rows)
+	rows = m.kb(rows)
 	p := &bot.SendPhotoParams{
 		ChatID:    chatID,
 		Photo:     &models.InputFileString{Data: fileID},
@@ -2222,7 +2260,7 @@ func (m botMessenger) SendPhoto(ctx context.Context, chatID int64, fileID, capti
 }
 
 func (m botMessenger) SendBanner(ctx context.Context, chatID int64, photo models.InputFile, caption string, entities []models.MessageEntity, rm models.ReplyMarkup) (int, error) {
-	p := &bot.SendPhotoParams{ChatID: chatID, Photo: photo, Caption: caption, ReplyMarkup: fitMarkup(rm), ProtectContent: protectedCtx(ctx)}
+	p := &bot.SendPhotoParams{ChatID: chatID, Photo: photo, Caption: caption, ReplyMarkup: m.markup(rm), ProtectContent: protectedCtx(ctx)}
 	if len(entities) > 0 {
 		p.CaptionEntities = entities
 	} else {
@@ -2258,7 +2296,7 @@ func (m botMessenger) SendDocumentKB(ctx context.Context, chatID int64, doc mode
 		Document:    doc,
 		Caption:     caption,
 		ParseMode:   models.ParseModeHTML,
-		ReplyMarkup: fitMarkup(rm),
+		ReplyMarkup: m.markup(rm),
 	})
 	if err != nil {
 		m.log.Error("send document kb", "err", err)
@@ -2355,7 +2393,7 @@ func (m botMessenger) CreateInvoiceLink(ctx context.Context, title, description,
 }
 
 func (m botMessenger) SendPhotoCacheable(ctx context.Context, chatID int64, cachedFileID string, embedBytes []byte, caption string, rows [][]models.InlineKeyboardButton) (int, string) {
-	rows = fitKeyboard(rows)
+	rows = m.kb(rows)
 
 	build := func(source string) (*models.Message, string, error) {
 		var photo models.InputFile
@@ -2485,7 +2523,7 @@ func (m botMessenger) SendFile(ctx context.Context, chatID int64, name string, d
 		ParseMode: models.ParseModeHTML,
 	}
 	if len(rows) > 0 {
-		params.ReplyMarkup = models.InlineKeyboardMarkup{InlineKeyboard: fitKeyboard(rows)}
+		params.ReplyMarkup = models.InlineKeyboardMarkup{InlineKeyboard: m.kb(rows)}
 	}
 	msg, err := b.SendDocument(ctx, params)
 	if err != nil {
@@ -2496,7 +2534,7 @@ func (m botMessenger) SendFile(ctx context.Context, chatID int64, name string, d
 }
 
 func (m botMessenger) EditText(ctx context.Context, chatID int64, msgID int, text string, rows [][]models.InlineKeyboardButton) bool {
-	rows = fitKeyboard(rows)
+	rows = m.kb(rows)
 	params := &bot.EditMessageTextParams{ChatID: chatID, MessageID: msgID, Text: text, ParseMode: models.ParseModeHTML}
 	if len(rows) > 0 {
 		params.ReplyMarkup = models.InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -2513,7 +2551,7 @@ func (m botMessenger) EditText(ctx context.Context, chatID int64, msgID int, tex
 }
 
 func (m botMessenger) EditCaption(ctx context.Context, chatID int64, msgID int, caption string, rows [][]models.InlineKeyboardButton) bool {
-	rows = fitKeyboard(rows)
+	rows = m.kb(rows)
 	params := &bot.EditMessageCaptionParams{ChatID: chatID, MessageID: msgID, Caption: caption, ParseMode: models.ParseModeHTML}
 	if len(rows) > 0 {
 		params.ReplyMarkup = models.InlineKeyboardMarkup{InlineKeyboard: rows}

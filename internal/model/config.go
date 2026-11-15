@@ -203,6 +203,11 @@ type BotConfig struct {
 	Welcome    WelcomeConfig `json:"welcome"`
 
 	PremiumEmoji map[string]string `json:"premium_emoji"`
+	// PremiumButtons — ставить премиум-эмодзи из PremiumEmoji значком на
+	// кнопки (icon_custom_emoji_id) вместо обычного эмодзи в начале подписи.
+	// Выключено по умолчанию: Telegram разрешает значки не каждому боту, а
+	// отказ в разметке стоил бы сообщения целиком.
+	PremiumButtons bool `json:"premium_buttons,omitempty"`
 
 	SubscriptionDomain string `json:"subscription_domain"`
 
@@ -1130,6 +1135,9 @@ func (c TributeConfig) StrictSubs() bool {
 type MiniAppConfig struct {
 	Enabled bool `json:"enabled"`
 	Init    bool `json:"init"`
+	// HideMenuButton убирает кнопку мини-аппа из главного меню: её заменяет
+	// кнопка меню чата у поля ввода. В напоминаниях кнопка остаётся.
+	HideMenuButton bool `json:"hide_menu_button,omitempty"`
 }
 
 // WalletConfig управляет кошельком. TopUp — можно ли класть деньги на баланс:

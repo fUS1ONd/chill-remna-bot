@@ -220,18 +220,3 @@ func greedySplit(row []models.InlineKeyboardButton, w []float64) [][]models.Inli
 	}
 	return append(out, row[start:len(row):len(row)])
 }
-
-// fitMarkup — то же для разметки, переданной целиком.
-func fitMarkup(rm models.ReplyMarkup) models.ReplyMarkup {
-	switch kb := rm.(type) {
-	case models.InlineKeyboardMarkup:
-		kb.InlineKeyboard = fitKeyboard(kb.InlineKeyboard)
-		return kb
-	case *models.InlineKeyboardMarkup:
-		if kb == nil {
-			return rm
-		}
-		return &models.InlineKeyboardMarkup{InlineKeyboard: fitKeyboard(kb.InlineKeyboard)}
-	}
-	return rm
-}
