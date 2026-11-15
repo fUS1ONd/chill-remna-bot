@@ -40,6 +40,50 @@ func TestSubpageConfigsOrdersByViewPosition(t *testing.T) {
 	}
 }
 
+// Панель 3.4 в списке отдаёт config: null — сам конфиг приходит только
+// запросом по uuid. Без дозапроса мини-апп не видит ни одного приложения.
+func TestSubpageConfigsFetchesNullConfigByUUID(t *testing.T) {
+	c := subpageClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/subscription-page-configs":
+			_, _ = io.WriteString(w, `{"response":{"total":2,"configs":[
+				{"uuid":"a","name":"Default","viewPosition":1,"config":null},
+				{"uuid":"b","name":"Inline","viewPosition":2,"config":{"platforms":{"x":1}}}
+			]}}`)
+		case "/api/subscription-page-configs/a":
+			_, _ = io.WriteString(w, `{"response":{"uuid":"a","name":"Default","viewPosition":1,"config":{"platforms":{"ios":1}}}}`)
+		default:
+			t.Errorf("лишний запрос %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	list, err := c.SubpageConfigs(context.Background())
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(list) != 2 || !strings.Contains(string(list[0].Config), `"ios"`) {
+		t.Fatalf("конфиг по uuid не подтянут: %+v", list)
+	}
+	if !strings.Contains(string(list[1].Config), `"x"`) {
+		t.Fatalf("конфиг из списка потерян: %s", list[1].Config)
+	}
+}
+
+// Дозапрос не удался — ошибка наверх: вызывающий поставит паузу и спросит
+// позже, а не закэширует «приложений нет».
+func TestSubpageConfigsByUUIDError(t *testing.T) {
+	c := subpageClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/subscription-page-configs" {
+			_, _ = io.WriteString(w, `{"response":{"total":1,"configs":[{"uuid":"a","name":"D","config":null}]}}`)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	if _, err := c.SubpageConfigs(context.Background()); err == nil {
+		t.Fatal("ошибка дозапроса проглочена")
+	}
+}
+
 // Панель до 3.0.0 такого маршрута не знает — это не ошибка, а сигнал идти
 // старым путём, на саму страницу подписки.
 func TestSubpageConfigsMissingAPI(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 )
 
 // SubpageConfig — конфигурация страницы подписки, как её хранит панель 3.x.
@@ -51,8 +52,46 @@ func (c *Client) SubpageConfigs(ctx context.Context) ([]SubpageConfig, error) {
 		return nil, fmt.Errorf("разбор ответа панели: %w", err)
 	}
 	out := env.Response.Configs
+	// Панель 3.4 в списке отдаёт config: null, сам конфиг — только по uuid.
+	for i := range out {
+		if !emptyRaw(out[i].Config) {
+			continue
+		}
+		full, err := c.subpageConfig(ctx, out[i].UUID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Config = full
+	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ViewPosition < out[j].ViewPosition })
 	return out, nil
+}
+
+func emptyRaw(r json.RawMessage) bool {
+	s := strings.TrimSpace(string(r))
+	return s == "" || s == "null"
+}
+
+// subpageConfig — сырой конфиг одной страницы подписки
+// (GET /api/subscription-page-configs/{uuid}).
+func (c *Client) subpageConfig(ctx context.Context, uuid string) (json.RawMessage, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/api/subscription-page-configs/"+url.PathEscape(uuid), nil)
+	if err != nil {
+		return nil, fmt.Errorf("нет связи с панелью: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyHTTP(resp)
+	}
+	var env struct {
+		Response struct {
+			Config json.RawMessage `json:"config"`
+		} `json:"response"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		return nil, fmt.Errorf("разбор конфига страницы подписки: %w", err)
+	}
+	return env.Response.Config, nil
 }
 
 // SubpageConfigUUIDFor reports which config is assigned to the subscription
