@@ -51,10 +51,22 @@ func New(login, pass string) *Client {
 	}
 }
 
+// webUserAgent — «браузер», которым бот представляется кабинету ФНС.
+// С 17.11.2026 metaDetails.userAgent обязателен: без него ФНС отвечает на
+// верный пароль 500 «Внутренняя ошибка», и чек не пробивается. Веб-кабинет
+// кладёт сюда navigator.userAgent.
+const webUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+// metaDetails — отпечаток клиента в deviceInfo.
+type metaDetails struct {
+	UserAgent string `json:"userAgent"`
+}
+
 type deviceInfo struct {
-	SourceDeviceID string `json:"sourceDeviceId"`
-	SourceType     string `json:"sourceType"`
-	AppVersion     string `json:"appVersion"`
+	SourceDeviceID string       `json:"sourceDeviceId"`
+	SourceType     string       `json:"sourceType"`
+	AppVersion     string       `json:"appVersion"`
+	MetaDetails    *metaDetails `json:"metaDetails,omitempty"`
 }
 
 type authRequest struct {
@@ -72,9 +84,14 @@ func (c *Client) authenticate(ctx context.Context) error {
 	c.authMu.Lock()
 	defer c.authMu.Unlock()
 	body, _ := json.Marshal(authRequest{
-		Username:   c.login,
-		Password:   c.pass,
-		DeviceInfo: deviceInfo{SourceDeviceID: "remnabot", SourceType: "WEB", AppVersion: "1.0.0"},
+		Username: c.login,
+		Password: c.pass,
+		DeviceInfo: deviceInfo{
+			SourceDeviceID: "remnabot",
+			SourceType:     "WEB",
+			AppVersion:     "1.0.0",
+			MetaDetails:    &metaDetails{UserAgent: webUserAgent},
+		},
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, BaseURL+"/auth/lkfl", bytes.NewReader(body))
 	if err != nil {
