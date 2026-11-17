@@ -267,3 +267,32 @@ func TestListIncomesPages(t *testing.T) {
 		})
 	}
 }
+
+// ФНС пускает в кабинет только с отпечатком клиента: с 17.11.2026 запрос без
+// deviceInfo.metaDetails.userAgent получал 500 «Внутренняя ошибка» даже на
+// верный пароль, и чеки не пробивались. Веб-кабинет шлёт сюда navigator.userAgent.
+func TestAuthenticateSendsMetaDetails(t *testing.T) {
+	var got authRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/lkfl" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"token":"tok123"}`))
+	}))
+	t.Cleanup(srv.Close)
+	prev := BaseURL
+	BaseURL = srv.URL
+	t.Cleanup(func() { BaseURL = prev })
+
+	if err := New("490101303391", "secret").authenticate(context.Background()); err != nil {
+		t.Fatalf("вход: %v", err)
+	}
+	if got.DeviceInfo.MetaDetails == nil || !strings.Contains(got.DeviceInfo.MetaDetails.UserAgent, "Mozilla/5.0") {
+		t.Fatalf("deviceInfo без metaDetails.userAgent: %+v", got.DeviceInfo)
+	}
+	if got.DeviceInfo.SourceDeviceID != "remnabot" || got.DeviceInfo.SourceType != "WEB" {
+		t.Fatalf("deviceInfo: %+v", got.DeviceInfo)
+	}
+}
